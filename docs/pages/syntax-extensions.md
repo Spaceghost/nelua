@@ -381,6 +381,44 @@ fold left at their level, including added operators at `concat`. Native `..`
 retains its own right-recursive operand rule. Use parentheses to make mixed
 operator intent clear; the API does not create arbitrary new precedence levels.
 
+## Embed Bend2
+
+Load `syntax.bend2` to write Bend2 definitions inline and call them as typed
+Nelua functions. This module is enabled separately from `syntax.all`.
+
+```nelua
+#syntax 'syntax.bend2'
+
+bend2 (twice(uint32): uint32) [=[
+import Base
+
+def twice(x: U32) -> U32:
+  (x * 2 : U32)
+]=]
+
+local value: uint32 = 21
+assert(twice(value) == 42)
+```
+
+On Linux, install Clang and Bend **2.0.40**, then run the example from the
+compiler checkout:
+
+```sh
+./nelua --cc clang --release examples/bend2/scalars.nelua
+```
+
+Use `NELUA_BEND` to select the Bend executable when it is outside your
+`PATH`. A block can export several functions by listing their signatures
+separated by commas. The C ABI passes `uint32`/`U32` and `float32`/`F32` by
+value. Bend checks the wrappers against their definitions and Nelua links the
+generated C into the executable. Bend is a build-time dependency.
+
+Each block reuses one CPU runtime, initialized on its first call. Calls into a
+block are serialized, so put a loop inside Bend when the call overhead matters.
+The bridge supports pure scalar exports. GPU execution, IO exports, compound
+values across the ABI, and imports relative to the Nelua file are outside its
+current scope. Include `import Base` in each block.
+
 ## Write an inline extension
 
 The following adds a contextual `check condition else message` statement:

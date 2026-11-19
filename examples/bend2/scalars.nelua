@@ -1,0 +1,42 @@
+#syntax 'syntax.bend2'
+
+bend2 (twice(uint32): uint32, mix(uint32, uint32): uint32, answer(): uint32,
+       scale(float32, float32): float32) [=[
+import Base
+
+def twice(x: U32) -> U32:
+  (x * 2 : U32)
+
+def mix(x: U32, y: U32) -> U32:
+  (twice(x) + y : U32)
+
+def answer() -> U32:
+  42
+
+def scale(x: F32, y: F32) -> F32:
+  (x * y : F32)
+]=]
+
+bend2 (triple(uint32): uint32) [=[
+import Base
+
+def triple(x: U32) -> U32:
+  (x * 3 : U32)
+]=]
+
+local x: uint32 = 21
+assert(twice(x) == 42)
+x = 8
+assert(twice(x) == 16)
+assert(mix(x, 3) == 19)
+assert(twice(4294967295) == 4294967294)
+assert(twice(0) == 0)
+assert(answer() == 42)
+assert(scale(-1.25_f32, 2.0_f32) == -2.5_f32)
+assert(triple(x) == 24)
+local function bend2(value: uint32): uint32
+  return value + 1
+end
+assert(bend2(twice(21)) == 43)
+bend2(twice(21))
+print('Bend2 exports returned the expected values')
