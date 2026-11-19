@@ -1,0 +1,15 @@
+#syntax 'syntax.bend2'
+
+bend2 gpu (dispatch(uint32): uint32) [=[
+import Base
+
+def kernel(x: U32) -> U32:
+  (x * 2 : U32)
+
+def dispatch(x: U32) -> U32:
+  kernel!(x)
+]=]
+
+assert(dispatch(21) == 42)
+assert(dispatch(42) == 84)
+print('Bend2 CUDA dispatch passed')

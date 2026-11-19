@@ -84,8 +84,8 @@ cost and limits; the list below is the short form:
   destructuring, scoped resources, vector comprehensions, literals and operators.
   Load them individually or as `syntax.all`, and compose project packs with
   `syntax.use` ([full guide](docs/pages/syntax-extensions.md)).
-  Load `syntax.bend2` separately to compile inline Bend2 into native scalar
-  functions ([Bend2 guide](docs/pages/syntax-extensions.md#embed-bend2)).
+  Load `syntax.bend2` separately for inline native Bend2 functions, IO, and
+  CUDA dispatch ([Bend2 guide](docs/pages/syntax-extensions.md#embed-bend2)).
 - **Optionals**: `T?` / `optional(T)` through `require 'optional'`, `nil` and `T` convert
   to it, `== nil` tests emptiness, `*T?` keeps the pointer size with `nilptr` as empty, and
   the postfix `expr?` propagates empty optionals, null pointers and the stdlib

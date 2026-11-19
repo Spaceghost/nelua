@@ -354,6 +354,10 @@ function State:make_api()
     raise_at(state.current, message, ...)
   end
 
+  function api.filename()
+    return state.name
+  end
+
   return api
 end
 

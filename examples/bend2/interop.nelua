@@ -1,0 +1,53 @@
+#syntax 'syntax.bend2'
+
+bend2 (shift(uint32): uint32, echo(string): string,
+       say(string): io uint32, pause(): io void, fetch(string): io string,
+       raw(bytes): bytes, numbers(u32s): u32s, foreign_value(): io uint32) [=[
+import Base
+import ./helper.bend as Helper
+
+def shift(x: U32) -> U32:
+  Helper.shift(x)
+
+def echo(text: String) -> String:
+  text
+
+def say(text: String) -> IO(U32):
+  IO.bind(Unit, U32, IO.print(text), _ => IO.pure(U32, 42))
+
+def pause() -> IO(Unit):
+  IO.sleep(1)
+
+def raw(data: List<&2, U32>) -> List<&2, U32>:
+  data
+
+def fetch(text: String) -> IO(String):
+  IO.pure(String, text)
+
+def numbers(data: List<&2, U32>) -> List<&2, U32>:
+  Con{1000, data}
+
+def foreign_value() -> IO(U32):
+  import "./effect.c"
+]=]
+
+bend2 (report(string): io void) [=[
+import Base
+def report(text: String) -> IO(Unit):
+  IO.print(text)
+]=]
+
+assert(shift(41) == 42)
+assert(echo('') == '')
+assert(echo('hé\0世界') == 'hé\0世界')
+assert(say('bend prints') == 42)
+assert(say('bend prints again') == 42)
+pause()
+assert(fetch('é\0é') == 'é\0é')
+assert(raw(string.char(0, 255, 128)) == string.char(0, 255, 128))
+local input: vector(uint32) = {7, 4294967295}
+local output = numbers(input)
+assert(output.size == 3 and output[0] == 1000 and output[1] == 7 and output[2] == 4294967295)
+report('second Bend2 block')
+assert(foreign_value() == 73)
+print('Bend2 imports, strings, bytes, and IO passed')

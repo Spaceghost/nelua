@@ -408,16 +408,74 @@ compiler checkout:
 ```
 
 Use `NELUA_BEND` to select the Bend executable when it is outside your
-`PATH`. A block can export several functions by listing their signatures
-separated by commas. The C ABI passes `uint32`/`U32` and `float32`/`F32` by
-value. Bend checks the wrappers against their definitions and Nelua links the
-generated C into the executable. Bend is a build-time dependency.
+`PATH`. A block can list several export signatures. Bend checks each wrapper
+against its definition, and Nelua links the generated C into the executable.
+The Bend CLI is a build-time dependency. Include `import Base` in each block.
 
-Each block reuses one CPU runtime, initialized on its first call. Calls into a
-block are serialized, so put a loop inside Bend when the call overhead matters.
-The bridge supports pure scalar exports. GPU execution, IO exports, compound
-values across the ABI, and imports relative to the Nelua file are outside its
-current scope. Include `import Base` in each block.
+### Values across the boundary
+
+| Signature type | Nelua value | Bend type |
+| --- | --- | --- |
+| `uint32` | `uint32` | `U32` |
+| `float32` | `float32` | `F32` |
+| `string` | UTF-8 `string` | `String` |
+| `bytes` | Binary `string` | `List<&2, U32>` with elements from 0 to 255 |
+| `u32s` | `vector(uint32)` | `List<&2, U32>` |
+
+Scalars pass by value. Text, bytes and vectors cross by copying. Text decodes
+invalid UTF-8 as replacement characters. Use `bytes` for arbitrary octets or
+`u32s` for full-width integers. Returned buffers use Nelua's default allocator,
+so they follow the standard string and vector lifetime rules. General records,
+tuples and Bend handles stay on the Bend side of the interface.
+
+### IO and local imports
+
+Write `io` before the result type to export an `IO(T)` action. A Nelua call runs
+the action synchronously and returns its result. Use `io void` for `IO(Unit)`.
+
+```nelua
+#syntax 'syntax.bend2'
+
+bend2 (report(string): io void) [=[
+import Base
+
+def report(text: String) -> IO(Unit):
+  IO.print(text)
+]=]
+
+report('Hello from Bend2')
+```
+
+The embedded event loop waits for spawned actions to finish before returning.
+Calls into the same block are serialized. Bend's `IO.exit` and `IO.die` exit
+the host process. Pass arguments explicitly to the export because `IO.args`
+does not receive the host command line.
+
+A top-level import such as `import ./helper.bend as Helper` resolves from the
+directory containing the Nelua file. Imports inside a Bend module resolve from
+that module's directory. Relative foreign effects such as
+`import "./effect.c"` follow the same rule. Base and BendHub imports still
+resolve through Bend. Run the combined example on Linux:
+
+```sh
+./nelua --cc clang examples/bend2/interop.nelua
+```
+
+### CUDA execution
+
+Use `bend2 gpu (...)` on Linux to run reachable Bend `!` calls on NVIDIA CUDA.
+Set `CUDA_HOME` to the toolkit if needed, and make its NVRTC library available
+to the dynamic loader. Build with Clang 19 or later.
+
+```sh
+./nelua --cc clang --release examples/bend2/cuda.nelua
+```
+
+Ordinary calls in that block can still run on the CPU. Each GPU block compiles
+its embedded kernel with NVRTC on first use and reuses the runtime and the
+kernel for later calls. It restores the calling thread's CUDA context on return.
+The GPU runtime defaults to a 1 GiB managed-memory allocation per block. Set
+`NELUA_BEND_GPU_MIB` to adjust that allocation for the application and device.
 
 ## Write an inline extension
 
@@ -474,6 +532,8 @@ node, not a Lua number, string, or plain list. Use `syntax.aster.Number{'42'}`,
 `syntax.aster.String{'text'}`, or a template to create literal expressions.
 An expression builder cannot return a block of statements; wrap statements in
 a native `(do … in value end)` expression instead.
+
+`syntax.filename()` returns the name of the file being parsed.
 
 Call registration methods and `syntax.use` while the module loads or inside an
 inline `#syntax` directive. Builders run after the source has been parsed; their
