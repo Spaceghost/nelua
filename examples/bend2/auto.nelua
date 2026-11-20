@@ -1,0 +1,21 @@
+#syntax 'syntax.bend2'
+
+-- The cutoff is illustrative. Measure it with the intended workload and device.
+bend2 auto (checksum(uint32): uint32 gpu_at(1, 12)) [=[
+import Base
+
+def sum_tips(+depth: Nat, +seed: U32) -> U32:
+  match depth:
+    case 0n:
+      seed
+    case 1n+smaller:
+      a b = sum_tips(smaller, seed) sum_tips(smaller, (seed + 1 : U32))
+      (a + b : U32)
+
+def checksum(depth: U32) -> U32:
+  sum_tips!(U32.to_nat(depth), 1)
+]=]
+
+assert(checksum(3) == 20)
+assert(checksum(12) == 28672)
+print('Bend2 automatic dispatch passed')

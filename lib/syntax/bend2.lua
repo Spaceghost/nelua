@@ -24,6 +24,25 @@ static u64 *nelua_bend_heap;
 #if BEND_CUDA
 static CUcontext nelua_bend_gpu_ctx, nelua_bend_previous_ctx;
 
+#if NELUA_BEND_AUTO
+static pthread_once_t nelua_bend_cuda_probe_once = PTHREAD_ONCE_INIT;
+static bool nelua_bend_cuda_ready;
+static void nelua_bend_probe_cuda(void) {
+  CUcontext previous;
+  if (!nelua_bend_load_cuda() || cuInit(0) != CUDA_SUCCESS ||
+      cuCtxGetCurrent(&previous) != CUDA_SUCCESS) return;
+  if (gpu_probe() != NULL) return;
+  nelua_bend_cuda_ready = cuCtxGetCurrent(&nelua_bend_gpu_ctx) == CUDA_SUCCESS;
+  if (cuCtxSetCurrent(previous) != CUDA_SUCCESS)
+    err_fail("cannot restore the calling CUDA context");
+}
+
+int NELUA_BEND_CUDA_READY(void) {
+  if (pthread_once(&nelua_bend_cuda_probe_once, nelua_bend_probe_cuda) != 0) abort();
+  return nelua_bend_cuda_ready;
+}
+#endif
+
 static u64 nelua_bend_gpu_bytes(void) {
   const char *arg = getenv("NELUA_BEND_GPU_MIB");
   if (arg == NULL || *arg == 0) return 1024ull << 20;
@@ -38,16 +57,23 @@ static u64 nelua_bend_gpu_bytes(void) {
 static void nelua_bend_enter(void) {
   if (pthread_mutex_lock(&nelua_bend_lock) != 0) abort();
 #if BEND_CUDA
-  if (cuInit(0) != CUDA_SUCCESS ||
-      cuCtxGetCurrent(&nelua_bend_previous_ctx) != CUDA_SUCCESS)
+#if !NELUA_BEND_AUTO
+  if (cuInit(0) != CUDA_SUCCESS) err_fail("cannot initialize CUDA");
+#endif
+  if (cuCtxGetCurrent(&nelua_bend_previous_ctx) != CUDA_SUCCESS)
     err_fail("cannot get the calling CUDA context");
 #endif
   if (nelua_bend_heap == NULL) {
 #if BEND_CUDA
+#if NELUA_BEND_AUTO
+    if (cuCtxSetCurrent(nelua_bend_gpu_ctx) != CUDA_SUCCESS)
+      err_fail("cannot select the Bend CUDA context");
+#else
     const char *reason = gpu_probe();
     if (reason != NULL) err_fail(reason);
     if (cuCtxGetCurrent(&nelua_bend_gpu_ctx) != CUDA_SUCCESS)
       err_fail("cannot retain the Bend CUDA context");
+#endif
     nelua_bend_heap = corpus_setup(true, 1, nelua_bend_gpu_bytes());
 #else
     nelua_bend_heap = corpus_setup(false, 1, 0);
@@ -158,14 +184,124 @@ local function enable_cuda(code)
   return '#ifndef __CUDACC_RTC__\n#define BEND_CUDA 1\n#endif\n' .. code
 end
 
-local function cuda_toolkit()
+-- The pinned Bend runtime calls these CUDA APIs. Expand CUDA header aliases
+-- before taking each symbol name so dlsym uses the ABI declared by the SDK.
+local cuda_symbols = {
+  'cuInit', 'cuCtxGetCurrent', 'cuCtxSetCurrent', 'cuCtxSynchronize',
+  'cuDeviceGet', 'cuDeviceGetAttribute', 'cuDevicePrimaryCtxRelease',
+  'cuDevicePrimaryCtxRetain', 'cuDeviceTotalMem', 'cuGetErrorName',
+  'cuLaunchKernel', 'cuMemAdvise', 'cuMemAllocManaged', 'cuMemcpyHtoD',
+  'cuMemsetD8', 'cuModuleGetFunction', 'cuModuleGetGlobal', 'cuModuleLoadData',
+  'nvrtcCompileProgram', 'nvrtcCreateProgram', 'nvrtcDestroyProgram', 'nvrtcGetCUBIN',
+  'nvrtcGetCUBINSize', 'nvrtcGetProgramLog', 'nvrtcGetProgramLogSize',
+}
+
+local function dynamic_cuda(code)
+  local declarations, loads, aliases = {}, {}, {}
+  for _, name in ipairs(cuda_symbols) do
+    local slot = 'nelua_bend_' .. name
+    local lib = name:sub(1, 2) == 'cu' and 'driver' or 'nvrtc'
+    declarations[#declarations + 1] = ('static __typeof__(&%s) %s;'):format(name, slot)
+    loads[#loads + 1] = ('  BEND_LOAD(%s, %s, %s);'):format(slot, lib, name)
+    aliases[#aliases + 1] = ('#undef %s\n#define %s %s'):format(name, name, slot)
+  end
+  local loader = table.concat(declarations, '\n') .. '\n' .. [[
+#define BEND_STRING_(x) #x
+#define BEND_STRING(x) BEND_STRING_(x)
+#define BEND_LOAD(slot, library, name) do { \
+  slot = (__typeof__(slot))dlsym(library, BEND_STRING(name)); \
+  if (slot == NULL) goto unavailable; \
+} while (0)
+
+static bool nelua_bend_load_cuda(void) {
+  void *driver = dlopen("libcuda.so.1", RTLD_NOW | RTLD_LOCAL);
+  if (driver == NULL) return false;
+#if CUDA_VERSION >= 13000
+  void *nvrtc = dlopen("libnvrtc.so.13", RTLD_NOW | RTLD_LOCAL);
+#else
+  void *nvrtc = dlopen("libnvrtc.so.12", RTLD_NOW | RTLD_LOCAL);
+#endif
+  if (nvrtc == NULL) goto unavailable;
+]] .. table.concat(loads, '\n') .. '\n' .. [[
+  return true;
+
+unavailable:
+  if (nvrtc != NULL) dlclose(nvrtc);
+  dlclose(driver);
+  return false;
+}
+#undef BEND_LOAD
+#undef BEND_STRING
+#undef BEND_STRING_
+]] .. table.concat(aliases, '\n')
+  local header = '#include <nvrtc.h>\n'
+  local at = assert(code:find(header, 1, true))
+  at = at + #header
+  return code:sub(1, at - 1) .. '#include <dlfcn.h>\n' .. loader .. '\n' .. code:sub(at)
+end
+
+local c_auto_policy = [[
+enum { BEND_AUTO, BEND_CPU, BEND_GPU };
+static int nelua_bend_device;
+static pthread_once_t nelua_bend_policy_once = PTHREAD_ONCE_INIT;
+
+static void nelua_bend_read_policy(void) {
+  const char *mode = getenv("NELUA_BEND_DEVICE");
+  if (mode == NULL || !*mode || strcmp(mode, "auto") == 0) return;
+  if (strcmp(mode, "cpu") == 0) nelua_bend_device = BEND_CPU;
+  else if (strcmp(mode, "gpu") == 0) nelua_bend_device = BEND_GPU;
+  else err_fail("NELUA_BEND_DEVICE must be auto, cpu, or gpu");
+}
+
+static bool nelua_bend_want_cuda(bool large) {
+  if (pthread_once(&nelua_bend_policy_once, nelua_bend_read_policy) != 0) abort();
+  return nelua_bend_device == BEND_GPU || (nelua_bend_device == BEND_AUTO && large);
+}
+]]
+
+local function auto_sources(code, gpu, routes, prefix)
+  local cpu_macros, undo, dispatch = {}, {}, {c_auto_policy}
+  local ready = prefix .. '_cuda_ready'
+  if gpu then
+    dispatch[#dispatch + 1] = ('extern int %s(void);'):format(ready)
+    gpu = '#define NELUA_BEND_AUTO 1\n#define NELUA_BEND_CUDA_READY ' .. ready .. '\n' ..
+      dynamic_cuda(enable_cuda(gpu))
+  end
+  for _, route in ipairs(routes) do
+    local symbol = route.symbol
+    cpu_macros[#cpu_macros + 1] = '#define ' .. symbol .. ' ' .. symbol .. '_cpu'
+    undo[#undo + 1] = '#undef ' .. symbol
+    if gpu then
+      dispatch[#dispatch + 1] = ('extern %s %s_gpu(%s);'):format(route.result, symbol, route.params)
+    end
+    dispatch[#dispatch + 1] = ('%s %s(%s) {'):format(route.result, symbol, route.params)
+    dispatch[#dispatch + 1] = ('  if (nelua_bend_want_cuda(%s >= %sull)) {'):format(
+      route.measure, route.cutoff)
+    if gpu then
+      dispatch[#dispatch + 1] = ('    if (%s()) return %s_gpu(%s);'):format(
+        ready, symbol, route.args)
+    end
+    dispatch[#dispatch + 1] = [[
+    if (nelua_bend_device == BEND_GPU) err_fail("Bend2 auto: CUDA is unavailable");
+  }]]
+    dispatch[#dispatch + 1] = ('  return %s_cpu(%s);\n}'):format(symbol, route.args)
+  end
+
+  local cpu = table.concat(cpu_macros, '\n') .. '\n' .. code ..
+    table.concat(undo, '\n') .. '\n' .. table.concat(dispatch, '\n') .. '\n'
+  return cpu, gpu
+end
+
+local function cuda_toolkit(link_directly)
   for _, root in ipairs{os.getenv('CUDA_HOME') or '', os.getenv('CUDA_PATH') or '',
     '/usr/local/cuda', '/opt/cuda'} do
-    if root ~= '' and fs.isfile(fs.join(root, 'include', 'nvrtc.h')) then
+    local include = fs.join(root, 'include')
+    if root ~= '' and fs.isfile(fs.join(include, 'cuda.h')) and fs.isfile(fs.join(include, 'nvrtc.h')) then
+      if not link_directly then return include end
       for _, lib in ipairs{'lib64', 'lib'} do
         local dir = fs.join(root, lib)
         if fs.isfile(fs.join(dir, 'libnvrtc.so')) then
-          return fs.join(root, 'include'), dir
+          return include, dir
         end
       end
     end
@@ -250,7 +386,7 @@ local function compile(directory, source, bridge, origin, has_io, gpu, cleanup)
   return library .. '#endif\n'
 end
 
-local function generate(source, bridge, prefix, origin, has_io, gpu)
+local function generate(source, bridge, prefix, origin, has_io, mode, cuda_include, routes, gpu_bridge)
   local existing = generated[prefix]
   if existing then return existing end
 
@@ -269,15 +405,29 @@ local function generate(source, bridge, prefix, origin, has_io, gpu)
   directory = directory:gsub('\n$', '')
   local cleanup = {}
   local staging
-  local success, path = pcall(function()
-    local code = compile(directory, source, bridge, origin, has_io, gpu, cleanup)
+  local function cache_source(code)
     local cached = fs.join(cache, prefix .. '_' .. stringer.hash(code) .. '.c')
     if fs.readfile(cached) ~= code then
       staging = assert(executor.evalex('mktemp', {fs.join(cache, '.bend2.XXXXXXXX')})):gsub('\n$', '')
       assert(fs.writefile(staging, code))
       assert(os.rename(staging, cached))
+      staging = nil
     end
     return cached
+  end
+
+  local success, path = pcall(function()
+    local code = compile(directory, source, bridge, origin, has_io, mode == 'gpu', cleanup)
+    local gpu_code
+    if #routes > 0 then
+      if cuda_include and not code:match('\n#define BANGS 0\n') then
+        -- Only pure, cutoff-eligible exports belong in the device translation unit.
+        gpu_code = compile(directory, source, table.concat(gpu_bridge, '\n'), origin, false, false, cleanup)
+        if gpu_code:match('\n#define BANGS 0\n') then gpu_code = nil end
+      end
+      code, gpu_code = auto_sources(code, gpu_code, routes, prefix)
+    end
+    return {cpu = cache_source(code), gpu = gpu_code and cache_source(gpu_code)}
   end)
   if staging then os.remove(staging) end
   for _, file in ipairs(cleanup) do os.remove(file) end
@@ -293,22 +443,24 @@ end
 return function(syntax)
   syntax.rules([[
     Bend2Export <-- {| NAME SKIP `(` {| (NAME SKIP (`,` NAME SKIP)*)? |} `)`
-                      `:` ('io' WORDSKIP $true / $false) NAME SKIP |}
+                      `:` ('io' WORDSKIP $true / $false) NAME SKIP
+                      (Bend2Cutoff / $false) |}
+    Bend2Cutoff <-- 'gpu_at' WORDSKIP `(` {[0-9]+} SKIP `,` {[0-9]+} SKIP `)`
   ]])
-  syntax.statement("'bend2' WORDSKIP ('gpu' WORDSKIP $true / $false) `(` {| Bend2Export (`,` @Bend2Export)* |} @`)` @STRING_LONG SKIP",
-    function(gpu, exports, code)
+  syntax.statement("'bend2' WORDSKIP ('gpu' WORDSKIP $'gpu' / 'auto' WORDSKIP $'auto' / $'cpu') `(` {| Bend2Export (`,` @Bend2Export)* |} @`)` @STRING_LONG SKIP",
+    function(mode, exports, code)
       if config.generator ~= 'c' then syntax.raise('Bend2 requires the Nelua C backend') end
 
       local cuda_include, cuda_lib
-      if gpu then
-        cuda_include, cuda_lib = cuda_toolkit()
-        if not cuda_include then syntax.raise('Bend2 GPU requires CUDA; set CUDA_HOME to the toolkit') end
+      if mode ~= 'cpu' then
+        cuda_include, cuda_lib = cuda_toolkit(mode == 'gpu')
+        if mode == 'gpu' and not cuda_include then syntax.raise('Bend2 GPU requires CUDA; set CUDA_HOME to the toolkit') end
       end
-      local signature = {}
+      local signature, routes = {}, {}
       local names = {}
-      local has_io, has_buffer_result, has_u32s
+      local has_io, has_buffer_result, has_u32s, gpu_has_u32s
       for _, export in ipairs(exports) do
-        local name, params, is_io, result = table.unpack(export)
+        local name, params, is_io, result, arg_index, cutoff = table.unpack(export)
         if not name:match('^[A-Za-z][A-Za-z0-9_]*$') or names[name] then
           syntax.raise('invalid or duplicate Bend2 export %q', name)
         end
@@ -322,19 +474,39 @@ return function(syntax)
             syntax.raise('unsupported Bend2 parameter type %q', param)
           end
         end
+        if arg_index then
+          arg_index, cutoff = tonumber(arg_index), tonumber(cutoff)
+          if mode ~= 'auto' or is_io then
+            syntax.raise('gpu_at is available on pure Bend2 auto exports')
+          end
+          local measure = params[arg_index]
+          if not measure or (measure ~= 'uint32' and not types[measure].input) then
+            syntax.raise('gpu_at must name a uint32 or buffer parameter position')
+          end
+          if not math.tointeger(cutoff) or cutoff > 4294967295 then
+            syntax.raise('gpu_at minimum must fit in uint32')
+          end
+          export[5], export[6] = arg_index, cutoff
+          if result == 'u32s' then gpu_has_u32s = true end
+          for _, param in ipairs(params) do
+            if param == 'u32s' then gpu_has_u32s = true end
+          end
+        end
         has_io = has_io or is_io
         has_buffer_result = has_buffer_result or types[result].output
         has_u32s = has_u32s or result == 'u32s'
         signature[#signature + 1] = name .. '(' .. table.concat(params, ',') .. '):' ..
-          (is_io and 'io ' or '') .. result
+          (is_io and 'io ' or '') .. result .. (arg_index and ('@%d=%d'):format(arg_index, cutoff) or '')
       end
 
       local filename = syntax.filename()
       local origin = filename and fs.dirname(fs.abspath(filename)) or fs.curdir()
       local prefix = 'nelua_bend2_' .. stringer.hash(
-        origin .. (gpu and '\ngpu\n' or '\ncpu\n') .. table.concat(signature, ',') .. '\n' .. code)
+        origin .. '\n' .. mode .. '\n' .. table.concat(signature, ',') .. '\n' .. code)
       local source = {code, ''}
       local bridge = {c_prelude}
+      local gpu_bridge = {c_prelude}
+      if gpu_has_u32s then gpu_bridge[#gpu_bridge + 1] = c_u32s end
       local declarations = {}
       local release
       if has_io then bridge[#bridge + 1] = c_io end
@@ -351,13 +523,13 @@ require 'memory'
       end
 
       for index, export in ipairs(exports) do
-        local name, params, is_io, result = table.unpack(export)
+        local name, params, is_io, result, arg_index, cutoff = table.unpack(export)
         local result_type = types[result]
         local entry = prefix .. '_entry_' .. index
         local symbol = prefix .. '_call_' .. index
         local fid = 'FID(' .. entry .. ')'
         local bend_params, c_params, nelua_params, native_params = {}, {}, {}, {}
-        local args, native_args, writes = {}, {}, {}
+        local args, native_args, c_args, writes = {}, {}, {}, {}
         local wrap = result_type.output ~= nil
 
         for i, param in ipairs(params) do
@@ -370,12 +542,14 @@ require 'memory'
           if t.input then
             wrap = true
             c_params[i] = 'void *' .. arg .. ', size_t ' .. arg .. '_size'
+            c_args[i] = arg .. ', ' .. arg .. '_size'
             native_params[i] = arg .. ': pointer, ' .. arg .. '_size: usize'
             local data = param == 'u32s' and '.data.data' or '.data'
             native_args[i] = arg .. data .. ', ' .. arg .. '.size'
             packed = ('%s(e, %s, %s_size)'):format(t.input, arg, arg)
           else
             c_params[i] = t.c .. ' ' .. arg
+            c_args[i] = arg
             native_params[i] = nelua_params[i]
             native_args[i] = arg
             packed = t.pack:format(arg)
@@ -421,6 +595,7 @@ static void __attribute__((constructor)) %s_use(void) {
         local native_result = result
         if result_type.output then
           c_params[#c_params + 1] = 'size_t *out_size'
+          c_args[#c_args + 1] = 'out_size'
           native_params[#native_params + 1] = 'out_size: *usize'
           native_args[#native_args + 1] = '&out_size'
           native_result = 'pointer'
@@ -438,9 +613,20 @@ static void __attribute__((constructor)) %s_use(void) {
           finish = '\n  return ' .. result_type.unpack:format('value') .. ';'
         end
         body[#body + 1] = '  nelua_bend_leave();'
-        bridge[#bridge + 1] = ('%s %s(%s) {\n%s%s\n}\n'):format(
-          result_type.c, symbol, #c_params == 0 and 'void' or table.concat(c_params, ', '),
-          table.concat(body, '\n'), finish)
+        local parameters = #c_params == 0 and 'void' or table.concat(c_params, ', ')
+        local function_format = '%s %s(%s) {\n%s%s\n}\n'
+        local body_code = table.concat(body, '\n')
+        bridge[#bridge + 1] = function_format:format(result_type.c, symbol, parameters, body_code, finish)
+        if arg_index then
+          gpu_bridge[#gpu_bridge + 1] = function_format:format(
+            result_type.c, symbol .. '_gpu', parameters, body_code, finish)
+          routes[#routes + 1] = {
+            symbol = symbol, result = result_type.c, params = parameters,
+            args = table.concat(c_args, ', '),
+            measure = 'a' .. arg_index .. (types[params[arg_index]].input and '_size' or ''),
+            cutoff = cutoff,
+          }
+        end
 
         local native_name = wrap and syntax.gensym('bend2_call') or name
         declarations[#declarations + 1] =
@@ -485,10 +671,13 @@ def nelua_bridge_anchor() -> IO(Unit):
 def main() -> IO(Unit):
   nelua_bridge_anchor()
 ]]
-      local path = generate(source, table.concat(bridge, '\n'),
-        prefix, origin, has_io, gpu)
-      local directives = ('## cfile(%q)\n## linklib "pthread"\n## linklib "m"\n'):format(path)
-      if gpu then
+      local paths = generate(source, table.concat(bridge, '\n'),
+        prefix, origin, has_io, mode, cuda_include, routes, gpu_bridge)
+      local directives = ('## cfile(%q)\n## linklib "pthread"\n## linklib "m"\n'):format(paths.cpu)
+      if paths.gpu then
+        directives = directives .. ('## cfile(%q)\n## cincdir(%q)\n## linklib "dl"\n'):format(
+          paths.gpu, cuda_include)
+      elseif mode == 'gpu' then
         directives = directives ..
           ('## cincdir(%q)\n## linkdir(%q)\n## linklib "cuda"\n## linklib "nvrtc"\n'):format(
             cuda_include, cuda_lib)

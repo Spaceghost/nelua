@@ -447,7 +447,7 @@ report('Hello from Bend2')
 ```
 
 The embedded event loop waits for spawned actions to finish before returning.
-Calls into the same block are serialized. Bend's `IO.exit` and `IO.die` exit
+IO calls into the same block are serialized. Bend's `IO.exit` and `IO.die` exit
 the host process. Pass arguments explicitly to the export because `IO.args`
 does not receive the host command line.
 
@@ -460,6 +460,59 @@ resolve through Bend. Run the combined example on Linux:
 ```sh
 ./nelua --cc clang examples/bend2/interop.nelua
 ```
+
+### Automatic CPU and GPU dispatch
+
+Use `bend2 auto` and give an eligible pure export a cutoff. Both devices use
+the same Bend implementation and the same Nelua call. Mark the compute entry
+with Bend's `!`; ordinary Nelua calls need no device selection.
+
+```nelua
+#syntax 'syntax.bend2'
+
+bend2 auto (checksum(uint32): uint32 gpu_at(1, 12)) [=[
+import Base
+
+def sum_tips(+depth: Nat, +seed: U32) -> U32:
+  match depth:
+    case 0n:
+      seed
+    case 1n+smaller:
+      a b = sum_tips(smaller, seed) sum_tips(smaller, (seed + 1 : U32))
+      (a + b : U32)
+
+def checksum(depth: U32) -> U32:
+  sum_tips!(U32.to_nat(depth), 1)
+]=]
+
+assert(checksum(3) == 20)
+assert(checksum(12) == 28672)
+```
+
+`gpu_at(1, 12)` sets the minimum for the first argument. A `uint32` is measured
+by value, `u32s` by element count, and `string` or `bytes` by byte count. The
+cutoff is inclusive. Measure it with the workload and hardware you expect to
+use. Exports without a cutoff and IO exports in an automatic block run on the
+CPU.
+
+With the CUDA 12 or 13 headers present at build time, Clang 19 or newer can
+build both paths. Set `CUDA_HOME` if needed. The executable loads the CUDA driver
+and matching NVRTC major version only when a call qualifies. If either library
+or a compatible device is missing, automatic mode runs that call on the CPU.
+Builds without the headers include the CPU path. CUDA execution failures after
+a device is selected are reported as errors.
+
+```sh
+./nelua --cc clang --release -o bend2-auto examples/bend2/auto.nelua
+./bend2-auto
+NELUA_BEND_DEVICE=cpu ./bend2-auto
+NELUA_BEND_DEVICE=gpu ./bend2-auto
+```
+
+`NELUA_BEND_DEVICE` is read at the first cutoff-enabled call in each block.
+`cpu` bypasses CUDA. `gpu` ignores the cutoffs on eligible exports and reports
+an error when CUDA is unavailable. The default, `auto`, uses the cutoffs.
+Use the overrides to compare steady-state workloads on the two devices.
 
 ### CUDA execution
 
