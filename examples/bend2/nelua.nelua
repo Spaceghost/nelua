@@ -1,0 +1,47 @@
+#syntax 'syntax.bend2'
+
+bend2 nelua (sum_squares gpu_at(1, 4096), distance) do
+  local function square(value: uint32): uint32
+    return value * value
+  end
+
+  local function sum_squares(count: uint32, bias: uint32): uint32
+    local total: uint32 = 17
+    for i: uint32 = 0, < count do
+      total = total + (square(i) + bias)
+    end
+    return total
+  end
+
+  local function distance(a: uint32, b: uint32): uint32
+    if a < b then
+      return b - a
+    elseif a == b then
+      return 0
+    else
+      return a - b
+    end
+  end
+end
+
+local function native_sum_squares(count: uint32, bias: uint32): uint32
+  local total: uint32 = 17
+  for i: uint32 = 0, < count do
+    total = total + (i * i + bias)
+  end
+  return total
+end
+
+for n: uint32 = 0, < 96 do
+  local bias: uint32 = n * 2654435761_u32
+  assert(sum_squares(n, bias) == native_sum_squares(n, bias))
+end
+local sizes: [5]uint32 = {4095, 4096, 4097, 8192, 65537}
+for i = 0, < #sizes do
+  local n = sizes[i]
+  assert(sum_squares(n, 4294967295_u32) == native_sum_squares(n, 4294967295_u32))
+end
+assert(distance(0, 4294967295_u32) == 4294967295_u32)
+assert(distance(4294967295_u32, 0) == 4294967295_u32)
+assert(distance(0, 0) == 0)
+print('Nelua and Bend2 results agree')

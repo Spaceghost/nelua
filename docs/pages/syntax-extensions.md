@@ -461,6 +461,52 @@ resolve through Bend. Run the combined example on Linux:
 ./nelua --cc clang examples/bend2/interop.nelua
 ```
 
+### Write Nelua and run it through Bend2
+
+Use `bend2 nelua` to keep the function body in Nelua. The compiler derives
+the export signature, checks the supported subset, lowers the body to Bend,
+and links the result into the same executable. Call the export like any other
+local Nelua function.
+
+```nelua
+#syntax 'syntax.bend2'
+
+bend2 nelua (sum_squares gpu_at(1, 4096)) do
+  local function sum_squares(count: uint32): uint32
+    local total: uint32 = 0
+    for i: uint32 = 0, < count do
+      total = total + (i * i)
+    end
+    return total
+  end
+end
+
+assert(sum_squares(4) == 14)
+```
+
+The reduction loop becomes a balanced tree of Bend tasks. Its `uint32` sum
+wraps as it would in Nelua. A `gpu_at` cutoff generates the Bend offload marker
+automatically. Without a cutoff, the function still runs through the Bend
+backend on the CPU. Choose the cutoff for your workload. This example uses an
+illustrative cutoff of 4096 elements.
+
+The current subset accepts pure local functions with explicit `uint32`
+parameters and one `uint32` result. It supports typed locals, addition,
+subtraction, multiplication, calls to earlier helpers in the block, and
+returning `if` branches with unsigned comparisons. Use decimal literals
+and add `_u32` to literals used in arithmetic or comparisons. Loops must
+have a zero start, an exclusive upper bound, and one assignment of the form
+`total = total + value`, where `value` is independent of `total`.
+Unsupported operations raise an error at the source location. General Nelua
+programs, IO, and arbitrary mutation require ordinary Nelua or a handwritten
+Bend block.
+
+Run the comparison against a normal Nelua implementation on the same inputs:
+
+```sh
+./nelua --cc clang examples/bend2/nelua.nelua
+```
+
 ### Automatic CPU and GPU dispatch
 
 Use `bend2 auto` and give an eligible pure export a cutoff. Both devices use

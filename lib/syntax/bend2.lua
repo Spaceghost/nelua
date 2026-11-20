@@ -446,9 +446,28 @@ return function(syntax)
                       `:` ('io' WORDSKIP $true / $false) NAME SKIP
                       (Bend2Cutoff / $false) |}
     Bend2Cutoff <-- 'gpu_at' WORDSKIP `(` {[0-9]+} SKIP `,` {[0-9]+} SKIP `)`
+    Bend2NeluaExport <-- {| NAME SKIP (Bend2Cutoff / $false) |}
+    Bend2Nelua <-- 'nelua' WORDSKIP $'nelua' `(` {| Bend2NeluaExport (`,` @Bend2NeluaExport)* |}
+                   @`)` @`do` Block @`end`
+    Bend2Raw <-- ('gpu' WORDSKIP $'gpu' / 'auto' WORDSKIP $'auto' / $'cpu')
+                 `(` {| Bend2Export (`,` @Bend2Export)* |} @`)` @STRING_LONG SKIP
   ]])
-  syntax.statement("'bend2' WORDSKIP ('gpu' WORDSKIP $'gpu' / 'auto' WORDSKIP $'auto' / $'cpu') `(` {| Bend2Export (`,` @Bend2Export)* |} @`)` @STRING_LONG SKIP",
+  syntax.statement("'bend2' WORDSKIP (Bend2Nelua / Bend2Raw)",
     function(mode, exports, code)
+      if mode == 'nelua' then
+        local names = exports
+        local functions
+        code, functions = require('nelua.bend2lower').translate(code)
+        mode, exports = 'auto', {}
+        for i, entry in ipairs(names) do
+          local name, arg, cutoff = table.unpack(entry)
+          local def = functions[name]
+          if not def then syntax.raise('Bend2 Nelua export %q has no definition in the block', name) end
+          exports[i] = {name, def.params, false, 'uint32', arg, cutoff,
+            bendname = def.name, offload = arg ~= false}
+        end
+      end
+
       if config.generator ~= 'c' then syntax.raise('Bend2 requires the Nelua C backend') end
 
       local cuda_include, cuda_lib
@@ -497,6 +516,7 @@ return function(syntax)
         has_u32s = has_u32s or result == 'u32s'
         signature[#signature + 1] = name .. '(' .. table.concat(params, ',') .. '):' ..
           (is_io and 'io ' or '') .. result .. (arg_index and ('@%d=%d'):format(arg_index, cutoff) or '')
+        if export.bendname then signature[#signature] = signature[#signature] .. '=' .. export.bendname end
       end
 
       local filename = syntax.filename()
@@ -557,7 +577,8 @@ require 'memory'
           writes[i] = ('  e.mem[task + %d] = %s;'):format(i - 1, packed)
         end
 
-        local bend_call = ('%s(%s)'):format(name, table.concat(args, ', '))
+        local bend_call = ('%s%s(%s)'):format(export.bendname or name,
+          export.offload and '!' or '', table.concat(args, ', '))
         local bend_result = result_type.bend
         if is_io then
           local capture = entry .. '_capture'
