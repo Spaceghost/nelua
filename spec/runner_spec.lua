@@ -69,7 +69,7 @@ it("preserves backend initialization for syntax-only hooks", function()
   for _,hook in ipairs{'before_parse', 'on_finish'} do
     for _,mode in ipairs{'--lint', '--print-ast'} do
       local out, err = executor.evalex(fs.findluabin(), {'-e', script:format(hook, mode)})
-      expect.contains(assert(out, err), 'hook ran')
+      expect.contains('hook ran', assert(out, err))
     end
   end
 end)
