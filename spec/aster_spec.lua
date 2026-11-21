@@ -16,6 +16,22 @@ it("create a valid ASTNode", function()
 end)
 
 
+it("preserves byte locations across source edits and out-of-order lookups", function()
+  local reference = require 'nelua.thirdparty.lpegrex'.calcline
+  local node = n.Id{'x'}
+  local src = {}
+  node.src = src
+  for _,content in ipairs{'a\r\n\nβz\n', '', 'no newline', '\n\n'} do
+    src.content = content
+    for pos=#content+2,0,-1 do
+      node.pos = pos
+      local loc = node:location()
+      expect.equal({loc.lineno, loc.colno, loc.line, loc.linestart, loc.lineend},
+                   {reference(content, pos)})
+    end
+  end
+end)
+
 it("error on invalid ASTNode", function()
   expect.fail(function() n.Invalid{} end)
   expect.fail(function() n.Block{1} end)

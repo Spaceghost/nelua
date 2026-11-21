@@ -133,12 +133,17 @@ local function run(args, redirect)
   elseif config.script then
     return runner.run_script()
   end
-  -- this is required here because the config may affect how they load
-  local generator = require('nelua.'..config.generator..'generator')
-  local preprocessor = require 'nelua.preprocessor'
-  local analyzer = require 'nelua.analyzer'
-  local AnalyzerContext = require 'nelua.analyzercontext'
-  local compiler = generator.compiler
+  local generator, analyzer, AnalyzerContext, preprocessor
+  local syntaxonly = config.lint or config.print_ast
+  -- Built-in backends are unnecessary for a parse-only invocation. Plugins
+  -- and before_parse hooks still see the normal module initialization order.
+  local builtin = config.generator == 'c' or config.generator == 'lua'
+  if not syntaxonly or not builtin or config.before_parse then
+    generator = require('nelua.'..config.generator..'generator')
+    preprocessor = require 'nelua.preprocessor'
+    analyzer = require 'nelua.analyzer'
+    AnalyzerContext = require 'nelua.analyzercontext'
+  end
   if config.timing then
     console.debugf('startup      %.1f ms', timer:elapsedrestart())
   end
@@ -213,6 +218,7 @@ local function run(args, redirect)
     return 0
   end
   -- choose a name for generated files
+  local compiler = generator.compiler
   local barename
   if inputname then
     barename = fs.basename(inputname):gsub('%.[^./\\]+$','') -- remove file extension

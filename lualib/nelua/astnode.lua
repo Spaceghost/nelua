@@ -17,7 +17,6 @@ local console = require 'nelua.utils.console'
 local tabler = require'nelua.utils.tabler'
 local shaper = require 'nelua.utils.shaper'
 local Attr = require 'nelua.attr'
-local lpegrex = require 'nelua.thirdparty.lpegrex'
 local config = require 'nelua.configer'.get()
 
 -- AST node class.
@@ -225,6 +224,36 @@ function ASTNode:copy_origin(node)
   return self
 end
 
+-- Nodes from one parse share a source. Index its line breaks on first use so
+-- successive diagnostics do not copy and scan the file prefix for every node.
+local lineindexes = setmetatable({}, {__mode = 'k'})
+
+local function source_location(src, pos)
+  local content = src.content
+  if pos < 0 then error 'invalid position' end
+  pos = math.min(pos, #content)
+  local breaks = lineindexes[src]
+  if not breaks or breaks.content ~= content then
+    breaks = {content = content}
+    local newline = content:find('\n', 1, true)
+    while newline do
+      breaks[#breaks+1] = newline
+      newline = content:find('\n', newline+1, true)
+    end
+    lineindexes[src] = breaks
+  end
+  -- A newline itself is column zero of the following line.
+  local low, high = 0, #breaks
+  while low < high do
+    local mid = (low+high+1)//2
+    if breaks[mid] <= pos then low = mid else high = mid-1 end
+  end
+  local last = breaks[low] or 0
+  local start = last+1
+  local finish = (breaks[low+1] or #content+1)-1
+  return low+1, pos-last, content:sub(start, finish), start, finish
+end
+
 --[[
 Returns a table with source location information for this node.
 The following fields may be present:
@@ -248,7 +277,7 @@ function ASTNode:location()
     endpos=endpos
   }
   if src and pos then
-    loc.lineno, loc.colno, loc.line, loc.linestart, loc.lineend = lpegrex.calcline(src.content, pos)
+    loc.lineno, loc.colno, loc.line, loc.linestart, loc.lineend = source_location(src, pos)
   end
   if pos and endpos then
     loc.len = endpos-pos
