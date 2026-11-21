@@ -23,21 +23,26 @@ function errorer.errorf(message, ...)
 end
 
 -- Generate a pretty error message associated with location from a source.
-function errorer.get_pretty_source_pos_errmsg(loc, errmsg, errname)
+local function get_source_pos_errmsg(loc, errmsg, errname, stable)
   local srcname, lineno, colno, line, len = loc.srcname, loc.lineno, loc.colno, loc.line, loc.len
-  local colbright, colreset = colors.bright, colors.reset
+  local colbright, colreset, colgreen, colmagenta = colors.bright, colors.reset, colors.green, colors.magenta
+  if stable then
+    -- Runtime messages are baked into generated programs, so they must not
+    -- depend on the compiler's terminal or checkout path.
+    colbright, colreset, colgreen, colmagenta = '', '', '', ''
+  end
   local lineloc = ''
   if line and colno then
     -- count number of tabs and spaces up to the text
     local ntabs = select(2, line:sub(1,colno-1):gsub('\t',''))
     local nspaces = colno-1-ntabs
     -- generate a line helper to assist showing the exact line column for the error
-    local linehelper = string.rep('\t', ntabs)..string.rep(' ', nspaces)..colbright..colors.green..'^'..colreset
+    local linehelper = string.rep('\t', ntabs)..string.rep(' ', nspaces)..colbright..colgreen..'^'..colreset
     if len and len > 1 then
       -- remove comments and trailing spaces
       local trimmedline = line:sub(1,colno+len-1):gsub('%-%-.*',''):gsub('%s+$','')
       len = math.min(#trimmedline-colno, len)
-      linehelper = linehelper..colors.magenta..string.rep('~',len)..colreset
+      linehelper = linehelper..colmagenta..string.rep('~',len)..colreset
     end
     lineloc = '\n'..line..'\n'..linehelper
   end
@@ -50,7 +55,9 @@ function errorer.get_pretty_source_pos_errmsg(loc, errmsg, errname)
   end
   -- choose the color for the message
   local errcolor = colreset
-  if string.find(errname, 'error', 1, true) then
+  if stable then
+    errcolor = ''
+  elseif string.find(errname, 'error', 1, true) then
     errcolor = colors.error
   elseif string.find(errname, 'warning', 1, true) then
     errcolor = colors.warn
@@ -58,7 +65,7 @@ function errorer.get_pretty_source_pos_errmsg(loc, errmsg, errname)
   -- generate the error message
   local msg = ''
   if srcname then
-    if errcolor == '' then -- no colored output
+    if stable or errcolor == '' then -- no color, or stable generated output
       srcname = srcname:match('[^/\\]+$') -- remove path prefix
     end
     msg = msg..srcname..colbright..':'
@@ -73,6 +80,12 @@ function errorer.get_pretty_source_pos_errmsg(loc, errmsg, errname)
   msg = msg..errcolor..errname..': '..colreset..colbright..errmsg..colreset..
         lineloc..errtraceback..'\n'
   return msg
+end
+
+function errorer.get_pretty_source_pos_errmsg(loc, errmsg, errname)
+  -- Runtime diagnostics are embedded into generated programs, so their text
+  -- must not depend on the compiler's terminal or checkout path.
+  return get_source_pos_errmsg(loc, errmsg, errname, errname == 'runtime error')
 end
 
 return errorer

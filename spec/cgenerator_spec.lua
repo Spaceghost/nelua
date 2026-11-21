@@ -5027,6 +5027,39 @@ it("assert builtin", function()
   ]], "assertion!")
 end)
 
+it("runtime diagnostics are plain and reproducible", function()
+  local console = require 'nelua.utils.console'
+  local c_generator = require 'nelua.cgenerator'
+  local old_colors = console.colors.enabled
+  local old_srcname = expect.config.srcname
+  expect.config.srcname = '/tmp/native-build-check/runtime-diagnostic.nelua'
+
+  local function generate(colors_enabled)
+    console.set_colors_enabled(colors_enabled)
+    local _, context = expect.analyze_ast("assert(false)\nerror()", nil, 'c')
+    return c_generator.generate(context)
+  end
+
+  local colored = generate(true) -- simulate a terminal-enabled compiler
+  local uncolored = generate(false)
+  console.set_colors_enabled(old_colors)
+  expect.config.srcname = old_srcname
+
+  expect.same_string(uncolored, colored)
+  assert(colored:find('runtime%-diagnostic%.nelua'))
+  assert(not colored:find('/tmp/', 1, true))
+  assert(not colored:find(string.char(27), 1, true))
+
+  -- Compile-time diagnostics still follow the interactive console settings.
+  local errorer = require 'nelua.utils.errorer'
+  local loc = {srcname = '/tmp/native-build-check/runtime-diagnostic.nelua', lineno = 1}
+  console.set_colors_enabled(true)
+  local interactive = errorer.get_pretty_source_pos_errmsg(loc, 'failure', 'error')
+  console.set_colors_enabled(old_colors)
+  assert(interactive:find('/tmp/native-build-check/runtime-diagnostic.nelua', 1, true))
+  assert(interactive:find(string.char(27), 1, true))
+end)
+
 it("check builtin", function()
   expect.run_c([[
     local count = 0
