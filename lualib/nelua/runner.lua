@@ -136,9 +136,9 @@ local function run(args, redirect)
   local generator, analyzer, AnalyzerContext, preprocessor
   local syntaxonly = config.lint or config.print_ast
   -- Built-in backends are unnecessary for a parse-only invocation. Plugins
-  -- and before_parse hooks still see the normal module initialization order.
+  -- and configuration hooks still see the normal module initialization order.
   local builtin = config.generator == 'c' or config.generator == 'lua'
-  if not syntaxonly or not builtin or config.before_parse then
+  if not syntaxonly or not builtin or config.before_parse or config.on_finish then
     generator = require('nelua.'..config.generator..'generator')
     preprocessor = require 'nelua.preprocessor'
     analyzer = require 'nelua.analyzer'

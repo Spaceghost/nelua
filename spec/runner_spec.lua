@@ -57,6 +57,23 @@ it("error on parsing an invalid program" , function()
   expect.run_error('--cc invgcc examples/helloworld.nelua')
 end)
 
+it("preserves backend initialization for syntax-only hooks", function()
+  local executor = require 'nelua.utils.executor'
+  local script = [[
+    require('nelua.configer').get_default().%s = function()
+      assert(package.loaded['nelua.cgenerator'] and package.loaded['nelua.analyzer'])
+      print('hook ran')
+    end
+    os.exit(require('nelua.runner').run({'%s', '--eval', 'local x = 1'}))
+  ]]
+  for _,hook in ipairs{'before_parse', 'on_finish'} do
+    for _,mode in ipairs{'--lint', '--print-ast'} do
+      local out, err = executor.evalex(fs.findluabin(), {'-e', script:format(hook, mode)})
+      expect.contains(assert(out, err), 'hook ran')
+    end
+  end
+end)
+
 it("print correct generated AST" , function()
   expect.run('--print-ast examples/helloworld.nelua', [[Block {
   Call {
