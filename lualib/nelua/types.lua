@@ -1696,6 +1696,7 @@ FunctionType.is_procedure = true
 FunctionType.is_falseable = true
 
 FunctionType.shape = shaper.fork_shape(Type.shape, {
+  ms_abi = shaper.optional_boolean,
   -- List of arguments attrs, they contain the type with annotations.
   argattrs = shaper.array_of(shaper.attr),
   -- List of arguments types.
@@ -1775,7 +1776,7 @@ end
 
 -- Checks if this type equals to another type.
 function FunctionType:is_equal(type)
-  return type.is_function and
+  return type.is_function and self.ms_abi == type.ms_abi and
          tabler.icompare(type.argtypes, self.argtypes) and
          tabler.icompare(type.rettypes, self.rettypes)
 end
@@ -1852,7 +1853,7 @@ end
 -- Return description for type as a string.
 function FunctionType:typedesc()
   local ss = sstream()
-  ss:addmany(self.name, '(')
+  ss:addmany(self.name, self.ms_abi and '<ms_abi>(' or '(')
   typedesc_addfields(ss, self.argattrs or self.args)
   ss:add(')')
   local rettypes = self.rettypes

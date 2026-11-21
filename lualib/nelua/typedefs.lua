@@ -359,6 +359,8 @@ typedefs.function_annots = {
   cattribute = shaper.shape{shaper.string},
   -- Whether the function is deprecated, generating warnings when compiling.
   deprecated = true,
+  -- Use the Microsoft x64 calling convention, including for indirect calls.
+  ms_abi = true,
   -- Whether to inline the function.
   inline = true,
   -- Whether the function can return, it uses '__attribute__((noreturn))' in C.

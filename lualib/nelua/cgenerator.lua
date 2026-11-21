@@ -163,9 +163,20 @@ typevisitors[types.EnumType] = function(context, type)
   table.insert(context.declarations, decemitter:generate())
 end
 
+-- Microsoft x64 uses this convention by default. Other x86-64 targets
+-- require an explicit declarator on both functions and function pointers.
+local function function_abi(type)
+  if not type.ms_abi then return end
+  local target = ccompiler.get_cc_info()
+  if not target.is_x86_64 then type.node:raisef("ms_abi requires an x86-64 target") end
+  if target.is_msc and not target.is_clang then return end
+  return '__attribute__((ms_abi))'
+end
+
 typevisitors[types.FunctionType] = function(context, type)
   local decemitter = CEmitter(context)
-  decemitter:add('typedef ', context:funcrettypename(type), ' (*', type.codename, ')')
+  local abi = function_abi(type)
+  decemitter:add('typedef ', context:funcrettypename(type), ' (', abi and abi .. ' ' or '', '*', type.codename, ')')
   if #type.argtypes > 0 then
     decemitter:add_text('(')
     for i,argtype in ipairs(type.argtypes) do
@@ -1421,6 +1432,13 @@ function visitors.Assign(context, node, emitter)
   emitter:add(defemitter)
 end
 
+local function function_declaration_result(context, type)
+  local result = context:funcrettypename(type)
+  local abi = function_abi(type)
+  if abi then return result .. ' ' .. abi end
+  return result
+end
+
 -- Emits function definition statement.
 function visitors.FuncDef(context, node, emitter)
   local attr = node.attr
@@ -1480,7 +1498,7 @@ function visitors.FuncDef(context, node, emitter)
   context:push_forked_state{funcscope = funcscope}
   -- add function return type and name
   context:push_forked_state{infuncdecl = true}
-  local rettypename = context:funcrettypename(type)
+  local rettypename = function_declaration_result(context, type)
   local decemitter, defemitter
   if mustdecl then
     decemitter = CEmitter(context)
@@ -1541,7 +1559,7 @@ function visitors.Function(context, node, emitter)
   local argsemitter, decemitter, defemitter = CEmitter(context), CEmitter(context), CEmitter(context)
   -- add function qualifiers and name
   local declname = context:declname(attr)
-  local rettypename = context:funcrettypename(attr.type)
+  local rettypename = function_declaration_result(context, attr.type)
   decemitter:add_qualified_declaration(attr, rettypename, declname)
   defemitter:add(rettypename, ' ', declname)
   emitter:add(declname)

@@ -996,6 +996,7 @@ function visitors.FuncType(context, node)
     rettypes = {}
   end
   local type = types.FunctionType(argattrs, rettypes, node, true)
+  type.ms_abi = node[3] or nil
   type.sideeffect = true
   attr.type = primtypes.type
   attr.value = type
@@ -3639,6 +3640,7 @@ local function resolve_function_type(node, symbol, varnode, varsym, decl, argatt
     type = types.PolyFunctionType(argattrs, rettypes, node)
   else
     type = types.FunctionType(argattrs, rettypes, node)
+    type.ms_abi = attr.ms_abi
   end
   type.symbol = symbol
   local vartype = varnode.attr.type
@@ -3919,6 +3921,8 @@ function visitors.FuncDef(context, node, opts)
       local annotname = annotnodes[i][1]
       if annotname == 'polymorphic' or annotname == 'alwayspoly' then
         attr.polymorphic = true
+      elseif annotname == 'ms_abi' then
+        attr.ms_abi = true
       elseif annotname == 'cimport' then
         attr.cimport = true
       elseif annotname == 'forwarddecl' then
@@ -4120,6 +4124,7 @@ function visitors.Function(context, node)
 
     -- traverse annotation nodes
     visitor_function_annotations(context, node, annotnodes, blocknode, symbol, type, true)
+    if type then type.ms_abi = attr.ms_abi end
 
     -- traverse the function block
     context:traverse_node(blocknode)

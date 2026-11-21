@@ -157,6 +157,7 @@ aster.register('VarargsType', {
 aster.register('FuncType', {
   shaper.array_of(shaper.Node), -- arguments types
   shaper.array_of(shaper.Node) + shaper.falsy, -- returns types
+  shaper.boolean + shaper.falsy, -- Microsoft x64 calling convention
 })
 
 -- Record field.

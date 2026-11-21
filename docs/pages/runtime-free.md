@@ -60,6 +60,27 @@ remain the caller's contract; null checks cannot prove an arbitrary pointer vali
 | Variable `<noinit>` / `pragmas.noinit` | Suppresses default variable initialization | It does not disable a runtime; every value must be initialized before being read |
 | `pragmas.nocstaticassert` | Suppresses generated C static assertions | Static assertions have no executable startup cost; retain ABI checks by default |
 
+## x86-64 firmware calls
+
+Use `<ms_abi>` on a function and `function<ms_abi>` on the type of a firmware
+callback. The function type carries the Microsoft x64 calling convention through
+record fields, assignments and indirect calls. For example, this helper calls a
+UEFI protocol method supplied by its caller.
+
+```lua
+## pragmas.freestanding = true
+
+local OutputString = @function<ms_abi>(pointer, *uint16): usize
+local function call_output(write: OutputString, console: pointer, text: *uint16): usize
+  <cexport 'call_output', ms_abi>
+  return write(console, text)
+end
+```
+
+Use `<cimport, ms_abi>` to declare an external firmware function. Annotate
+implementations with the same convention as their callback type. The analyzer
+checks the convention when assigning function values.
+
 ## The `freestanding` pragma
 
 `pragmas.freestanding` (or `-P freestanding`) turns the recipe above into a

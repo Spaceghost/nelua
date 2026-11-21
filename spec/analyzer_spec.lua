@@ -699,6 +699,17 @@ it("function definition", function()
   ]], "invalid type for function return")
 end)
 
+it("Microsoft x64 function types", function()
+  expect.analyze_error([[
+    local function firmware() <ms_abi> end
+    local ordinary: function() = firmware
+  ]], "no viable type conversion")
+  expect.analyze_error([[
+    local function ordinary() end
+    local firmware: function<ms_abi>() = ordinary
+  ]], "no viable type conversion")
+end)
+
 it("closures", function()
   expect.analyze_ast([[
     local x: integer = 1

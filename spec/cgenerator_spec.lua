@@ -4857,6 +4857,34 @@ it("type codenames", function()
   })
 end)
 
+it("Microsoft x64 function types", function()
+  local target = require 'nelua.ccompiler'.get_cc_info()
+  if not target.is_x86_64 then return end
+  local source = [[
+    local Callback = @function<ms_abi>(cint, cint, cint, cint, cint): cint
+    local Protocol = @record{run: Callback}
+    local function add(a: cint, b: cint, c: cint, d: cint, e: cint): cint <ms_abi>
+      return a+b+c+d+e
+    end
+    local function invoke(p: *Protocol): cint <cexport 'invoke', ms_abi>
+      return p.run(1, 2, 3, 4, 5)
+    end
+    local p: Protocol = {run = add}
+    assert(invoke(&p) == 15)
+    p.run = function(a: cint, b: cint, c: cint, d: cint, e: cint): cint <ms_abi>
+      return a*b*c*d*e
+    end
+    assert(invoke(&p) == 120)
+  ]]
+  expect.run_c(source)
+  if not target.is_msc or target.is_clang then
+    expect.generate_c(source, {'(__attribute__((ms_abi)) *', '__attribute__((ms_abi)) invoke('})
+    expect.generate_c([[
+      local function imported(a: cint): cint <cimport, ms_abi> end
+    ]], '__attribute__((ms_abi)) imported(')
+  end
+end)
+
 it("entrypoint", function()
   expect.run_c([[
     print 'hello'

@@ -174,7 +174,10 @@ exprprim        <-- ppcallprim / id / DoExpr / Paren
 RecordType      <== 'record' WORDSKIP @`{` (RecordField (fieldsep RecordField)* fieldsep?)? @`}`
 UnionType       <== 'union' WORDSKIP @`{` (UnionField (fieldsep UnionField)* fieldsep?)? @`}`
 EnumType        <== 'enum' WORDSKIP (`(` @typeexpr @`)`)~? @`{` @enumfields @`}`
-FuncType        <== 'function' WORDSKIP @`(` functypeargs @`)`(`:` @funcrets)?
+FuncType        <== 'function' WORDSKIP (
+                    `<` 'ms_abi' WORDSKIP @`>` funcparams (`:` @funcrets)~? $true /
+                    funcparams (`:` @funcrets)?)
+funcparams      <-- @`(` functypeargs @`)`
 ArrayType       <== 'array' WORDSKIP @`(` @typeexpr (`,` @expr)? @`)`
 PointerType     <== 'pointer' WORDSKIP (`(` @typeexpr @`)`)?
 VariantType     <== 'variant' WORDSKIP `(` @typearg (`,` @typearg)* @`)`
