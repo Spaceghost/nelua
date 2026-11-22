@@ -700,6 +700,26 @@ it("multiple assignment", function()
   ]])
 end)
 
+it("uses one temporary for plain two-way swaps", function()
+  expect.generate_c("local a,b=1,2; a,b=b,a", {
+    "_asgntmp_1 = a;", "a = b;", "b = _asgntmp_1;" })
+  expect.generate_c([[
+    local Pair = @record{a: *integer, b: *integer}
+    function Pair:swap() self.a,self.b = self.b,self.a end
+  ]], {"_asgntmp_1 = self->a;", "self->a = self->b;", "self->b = _asgntmp_1;"})
+  expect.generate_c("local a: integer <volatile>; local b=2; a,b=b,a", {
+    "_asgntmp_1 = b;", "_asgntmp_2 = a;" })
+  expect.generate_c("local a: int32; local b: int64; a,b=b,a", "_asgntmp_2")
+  expect.run_c([[
+    local hits = 0
+    local Pair = @record{a: integer, b: integer}
+    local pair: Pair = {1,2}
+    local function get(): *Pair hits = hits + 1; return &pair end
+    pair.a,pair.b = get().b,get().a
+    assert(hits == 2 and pair.a == 2 and pair.b == 1)
+  ]])
+end)
+
 it("function definition", function()
   expect.generate_c("local function f() end",
     "void f(void) {\n}")

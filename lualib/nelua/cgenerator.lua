@@ -1388,9 +1388,49 @@ function visitors.VarDecl(context, node, emitter)
   emitter:add(defemitter)
 end
 
+-- Identify plain variables and direct fields without evaluating an address
+-- expression. A shared record base stays valid across both stores.
+local function swap_slot(context, node)
+  if not node.attr:must_define_at_runtime() then return end
+  local base = node.is_DotIndex and node[2] or node
+  if not base.is_Id then return end
+  local attr = base.attr
+  if attr.comptime or attr.cimport or attr.nodecl or attr.volatile or attr.atomic or
+     attr.cqualifier or attr.cpostqualifier or attr.cattribute or attr.register or
+     (context.volatile_declarations and context.volatile_declarations[attr]) then return end
+  if base == node then return false, attr end
+  local record = attr.type:implicit_deref_type()
+  if record.is_record and not record.cimport and not record.nodecl then
+    return attr, node.attr.dotfieldname
+  end
+end
+
+local function is_plain_swap(context, vars, vals)
+  if #vars ~= 2 or #vals ~= 2 or context.pragmas.volatile then return false end
+  local type = vars[1].attr.type
+  if not (type.is_scalar or type.is_boolean or type.is_pointer) or
+     type ~= vars[2].attr.type or type ~= vals[1].attr.type or type ~= vals[2].attr.type then
+    return false
+  end
+  local base, a = swap_slot(context, vars[1])
+  local other, b = swap_slot(context, vars[2])
+  if not a or not b or a == b or base ~= other then return false end
+  local rbase, first = swap_slot(context, vals[1])
+  local sbase, second = swap_slot(context, vals[2])
+  return rbase == base and sbase == base and first == b and second == a
+end
+
 -- Emits assignment statement.
 function visitors.Assign(context, node, emitter)
   local varnodes, valnodes = node[1], node[2]
+  if is_plain_swap(context, varnodes, valnodes) then
+    local a, b = varnodes[1], varnodes[2]
+    local tmp = context.scope:get_up_function_scope():generate_name('_asgntmp')
+    emitter:add_indent_ln(a.attr.type, ' ', tmp, ' = ', a, ';')
+    emitter:add_indent_ln(a, ' = ', b, ';')
+    emitter:add_indent_ln(b, ' = ', tmp, ';')
+    return
+  end
   local defemitter = emitter:fork()
   local multiretvalname
   local upfuncscope = context.scope:get_up_function_scope()

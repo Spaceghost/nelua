@@ -580,6 +580,11 @@ function CEmitter:add_qualified_declaration(attr, type, name)
       self:add('const ')
     end
   end
+  if pragmas.volatile then
+    -- A later assignment can appear outside the declaration's pragma scope.
+    context.volatile_declarations = context.volatile_declarations or {}
+    context.volatile_declarations[attr] = true
+  end
   if attr.volatile or pragmas.volatile then
     self:add('volatile ')
   end
