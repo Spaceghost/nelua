@@ -1,0 +1,118 @@
+require 'typedluatable'
+require 'allocators.general'
+
+local Ledger = @record{calls: usize, live: usize, fail_on: usize}
+local CheckedAllocator = @record{ledger: *Ledger}
+
+function CheckedAllocator:alloc(n: usize, flags: facultative(usize)): pointer
+  self.ledger.calls = self.ledger.calls + 1
+  if self.ledger.calls == self.ledger.fail_on then return nilptr end
+  local p = general_allocator:alloc(n)
+  if p ~= nilptr then self.ledger.live = self.ledger.live + 1 end
+  return p
+end
+
+function CheckedAllocator:dealloc(p: pointer): void
+  if p ~= nilptr then
+    self.ledger.live = self.ledger.live - 1
+    general_allocator:dealloc(p)
+  end
+end
+
+## Allocator_implement_interface(CheckedAllocator)
+
+local function collide(key: int64): usize
+  return 0
+end
+
+local T = @TypedLuaTable(int64, boolean, CheckedAllocator, collide)
+local ledger: Ledger
+do
+  local t <close> = T.make({ledger=&ledger})
+  local alias: *T = &t
+  assert(t:peek(7) == nil and t:get(7) == nil)
+  assert(t:set(7,nil) and not t:erase(7))
+  assert(t:len() == 0 and ledger.calls == 0)
+  for phase: usize=1,2 do
+    ledger.fail_on = ledger.calls + phase
+    assert(not t:set(7,false))
+    assert(t:peek(7) == nil and t:len() == 0 and ledger.live == 0)
+  end
+  ledger.fail_on = 0
+  for key: int64=1,5 do assert(t:set(key,false)) end
+  assert(t:len() == 5 and ledger.live == 2)
+  local old = t:peek(3):get()
+  assert(old ~= nilptr and not $old)
+  for phase: usize=1,2 do
+    ledger.fail_on = ledger.calls + phase
+    assert(not alias:set(6,true))
+    assert(t:len() == 5 and ledger.live == 2 and t:peek(6) == nil)
+    assert(t:peek(3):get() == old and not $old)
+    for key: int64=1,5 do assert(t:get(key):has() and not t:get(key):get()) end
+  end
+  ledger.fail_on = ledger.calls + 1
+  local calls = ledger.calls
+  assert(t:set(3,true) and $old and ledger.calls == calls)
+  assert(t:set(2,nil) and t:peek(2) == nil and t:peek(3):get() == old)
+  ledger.fail_on = 0
+  for key: int64=6,70 do assert(alias:set(key,key % 2 == 0)) end
+  assert(t:len() == 69 and ledger.live == 2 and t:get(3):get())
+  for key: int64=6,70 do assert(t:get(key):get() == (key % 2 == 0)) end
+  assert(t:erase(3) and t:get(3) == nil and not t:erase(3))
+  t:destroy()
+  t:destroy()
+  assert(t:len() == 0 and ledger.live == 0)
+  assert(t:set(-1,false))
+end
+assert(ledger.live == 0)
+
+do
+  local Strings = @TypedLuaTable(string, string, GeneralAllocator)
+  local s <close> = Strings.make(general_allocator)
+  assert(s:set('a\0b','xyz') and s:set('',''))
+  assert(s:get('a') == nil and s:get('a\0b'):get() == 'xyz')
+  assert(s:get(''):has() and s:get(''):get() == '')
+  assert(s:set('a\0b',nil) and s:get('a\0b') == nil and s:len() == 1)
+end
+-- Compare the observable probe costs of default mixing, the measured
+-- explicit mixer, and opt-in identity with signed same-low-bit keys.
+local probes: usize
+local function same(a: int64, b: int64): boolean
+  probes = probes + 1
+  return a == b
+end
+local function identity(key: int64): usize <inline,nosideeffect>
+  return (@usize)(key)
+end
+local function measured(key: int64): usize <inline,nosideeffect>
+  local h = (@uint64)(key)
+  h = (h ~ (h >> 30)) * 0xbf58476d1ce4e5b9_u64
+  return (@usize)(h ~ (h >> 31))
+end
+do
+  local D = @TypedLuaTable(int64, int64, GeneralAllocator, nil, same)
+  local M = @TypedLuaTable(int64, int64, GeneralAllocator, measured, same)
+  local I = @TypedLuaTable(int64, int64, GeneralAllocator, identity, same)
+  local d <close> = D.make(general_allocator)
+  local m <close> = M.make(general_allocator)
+  local i <close> = I.make(general_allocator)
+  for n: int64=-64,<64 do
+    local key = n * 1099511627776_i64 + 1
+    assert(d:set(key,n) and m:set(key,n) and i:set(key,n))
+  end
+  for n: int64=-64,<64 do
+    local key = n * 1099511627776_i64 + 1
+    probes = 0
+    assert(d:get(key):get() == n)
+    local p = probes
+    probes = 0
+    assert(m:get(key):get() == n and probes == p)
+  end
+  probes = 0
+  for n: int64=-64,<64 do assert(d:get(n * 1099511627776_i64 + 1):get() == n) end
+  assert(probes < 128 * 4)
+  probes = 0
+  for n: int64=-64,<64 do assert(i:get(n * 1099511627776_i64 + 1):get() == n) end
+  assert(probes == 128 * 129 // 2)
+end
+print('typedluatable OK!')

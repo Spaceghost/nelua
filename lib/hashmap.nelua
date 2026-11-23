@@ -205,6 +205,34 @@ local INVALID_INDEX: usize <comptime> = (@usize)(-1)
     return node_index, prev_node_index, bucket_index
   end
 
+  local function hashmapT_rebuild(self: *hashmapT): void
+    memory.spanset(self.buckets, INVALID_INDEX)
+    -- unlink used nodes while linking free nodes
+    local free_index: usize = INVALID_INDEX
+    for i:isize=(@isize)(self.nodes.size-1),0,-1 do
+      local node: *hashnodeT = &self.nodes[(@usize)(i)]
+      if node.filled then
+        node.next = INVALID_INDEX
+      else
+        node.next = free_index
+        free_index = (@usize)(i)
+      end
+    end
+    self.free_index = free_index
+    -- fill buckets and link used nodes
+    for i:usize=0,<self.nodes.size do
+      if self.nodes[i].filled then
+        local node_index: usize, prev_node_index: usize, bucket_index: usize = self:_find(self.nodes[i].key)
+        if likely(prev_node_index == INVALID_INDEX) then
+          self.buckets[bucket_index] = i
+        else
+          self.nodes[prev_node_index].next = i
+        end
+        self.nodes[i].next = node_index
+      end
+    end
+  end
+
   --[[
   Sets the number of buckets to at least `bucket_count` and rehashes the container when needed.
   The number of new buckets will always be at least
@@ -249,31 +277,7 @@ local INVALID_INDEX: usize <comptime> = (@usize)(-1)
     -- reallocate nodes and buckets
     self.nodes = self.allocator:xspanrealloc0(self.nodes, node_count)
     self.buckets = self.allocator:xspanrealloc(self.buckets, bucket_count)
-    memory.spanset(self.buckets, INVALID_INDEX)
-    -- unlink used nodes while linking free nodes
-    local free_index: usize = INVALID_INDEX
-    for i:isize=(@isize)(self.nodes.size-1),0,-1 do
-      local node: *hashnodeT = &self.nodes[(@usize)(i)]
-      if node.filled then
-        node.next = INVALID_INDEX
-      else
-        node.next = free_index
-        free_index = (@usize)(i)
-      end
-    end
-    self.free_index = free_index
-    -- fill buckets and link used nodes
-    for i:usize=0,<self.nodes.size do
-      if self.nodes[i].filled then
-        local node_index: usize, prev_node_index: usize, bucket_index: usize = self:_find(self.nodes[i].key)
-        if likely(prev_node_index == INVALID_INDEX) then
-          self.buckets[bucket_index] = i
-        else
-          self.nodes[prev_node_index].next = i
-        end
-        self.nodes[i].next = node_index
-      end
-    end
+    hashmapT_rebuild(self)
   end
 
   --[[
@@ -318,6 +322,65 @@ local INVALID_INDEX: usize <comptime> = (@usize)(-1)
       return node_index
     end
   end
+
+  ## if not owned_values and not K.is_owned and not K.nocopy and not V.nocopy then
+  -- Additive, recoverable growth for copyable plain keys and values. Retain
+  -- the original layout, capacity and references if either allocation fails.
+  local function hashmapT_try_grow(self: *hashmapT): boolean
+    local maximum: usize = (@usize)(-1)
+    local n: usize = INIT_CAPACITY
+    if self.buckets.size ~= 0 then
+      if self.buckets.size > maximum // 2 then return false end
+      n = self.buckets.size * 2
+    end
+    local count = n - n // 4 -- 75% for power-of-two bucket counts
+    if n > maximum // #usize or count > maximum // #hashnodeT then return false end
+    local nodes = self.allocator:spanalloc0(hashnodeT, count)
+    if nodes.size ~= count then return false end
+    local buckets = self.allocator:spanalloc(usize, n)
+    if buckets.size ~= n then
+      self.allocator:spandealloc(nodes)
+      return false
+    end
+    -- Copy before freeing anything. No caller-visible state changes before
+    -- both allocations have succeeded.
+    for i: usize=0,<self.nodes.size do nodes[i] = self.nodes[i] end
+    self.allocator:spandealloc(self.buckets)
+    self.allocator:spandealloc(self.nodes)
+    self.buckets, self.nodes = buckets, nodes
+    hashmapT_rebuild(self)
+    return true
+  end
+
+  local function hashmapT_try_insert(self: *hashmapT, key: K, value: V,
+                                     prev: usize, bucket: usize): boolean <noinline>
+    if self.buckets.size == 0 or self.size + 1 >= self.nodes.size then
+      if not hashmapT_try_grow(self) then return false end
+      local node: usize
+      node, prev, bucket = self:_find(key)
+    end
+    local idx = self.free_index
+    local slot = &self.nodes[idx]
+    self.free_index = slot.next
+    $slot = {key=key, value=value, filled=true, next=INVALID_INDEX}
+    if prev == INVALID_INDEX then self.buckets[bucket] = idx
+    else self.nodes[prev].next = idx end
+    self.size = self.size + 1
+    return true
+  end
+
+  -- Store a copyable key/value pair, returning false instead of panicking
+  -- when either allocation for growth fails. Successful growth invalidates
+  -- references, as rehash does; failed writes change no entries.
+  function hashmapT:try_set(key: K, value: V): boolean <inline>
+    local idx, prev, bucket = self:_find(key)
+    if idx ~= INVALID_INDEX then
+      self.nodes[idx].value = value
+      return true
+    end
+    return hashmapT_try_insert(self, key, value, prev, bucket)
+  end
+  ## end
 
   --[[
   Returns a reference to the value that is mapped to a key.

@@ -1,0 +1,66 @@
+-- Opt-in typed facade for native hashmap. See docs/design/typed-lua-tables.md.
+require 'hashmap'
+require 'optional'
+
+## local function make_typed(K, V, A, H, Eq)
+  ## static_assert(traits.is_type(K) and traits.is_type(V) and traits.is_type(A),
+  ##               'TypedLuaTable requires key, value and explicit allocator types')
+  ## static_assert(not K.is_owned and not K.nocopy and not V.is_owned and not V.nocopy,
+  ##               'TypedLuaTable currently supports copyable keys and values')
+  local Key: type = #[K]#
+  local Value: type = #[V]#
+  local Allocator: type = #[A]#
+  ## if not H and K.is_integral and K.size <= 8 then
+  local function mixed_integer(key: Key): usize <inline,nosideeffect>
+    local h = (@uint64)(key)
+    h = (h ~ (h >> 30)) * 0xbf58476d1ce4e5b9_u64
+    return (@usize)(h ~ (h >> 31))
+  end
+  local Map: type = @hashmap(Key, Value, mixed_integer, #[Eq]#, Allocator)
+  ## else
+  local Map: type = @hashmap(Key, Value, #[H]#, #[Eq]#, Allocator)
+  ## end
+  local Maybe = @optional(Value)
+  local Pointer = @optional(*Value)
+  local T <owned> = @record{map: Map}
+
+  function T.make(allocator: Allocator): T <inline>
+    return (@T){map=Map.make(allocator)}
+  end
+
+  function T:peek(key: Key): Pointer <inline>
+    return self.map:peek(key)
+  end
+
+  function T:get(key: Key): Maybe <inline>
+    local p = self.map:peek(key)
+    if p == nilptr then return nil end
+    return $p
+  end
+
+  function T:set(key: Key, value: Maybe): boolean <inline>
+    if not value:has() then
+      self.map:erase(key)
+      return true
+    end
+    return self.map:try_set(key, value.v)
+  end
+
+  function T:erase(key: Key): boolean <inline>
+    return self.map:erase(key)
+  end
+
+  function T:len(): usize <inline>
+    return (@usize)(#self.map)
+  end
+
+  function T:destroy(): void <inline>
+    self.map:destroy()
+  end
+
+  function T:__close(): void <inline>
+    self:destroy()
+  end
+  ## return T
+## end
+global TypedLuaTable: type = #[generalize(make_typed)]#

@@ -1,0 +1,53 @@
+## pragmas.freestanding = true
+require 'luatable'
+require 'typedluatable'
+require 'allocators.arena'
+
+local Arena = @ArenaAllocator(1280, 16)
+local A = @record{arena: *Arena}
+
+function A:alloc(n: usize, flags: facultative(usize)): pointer
+  if n > 1280 then return nilptr end
+  return self.arena:alloc(n)
+end
+
+function A:alloc0(n: usize, flags: facultative(usize)): pointer
+  local p = (@*[0]byte)(self:alloc(n, flags))
+  if p ~= nilptr then
+    for i: usize=0,<n do p[i] = 0 end
+  end
+  return p
+end
+
+function A:dealloc(p: pointer): void
+  self.arena:dealloc(p)
+end
+
+## Allocator_implement_interface(A)
+
+local T = @TypedLuaTable(int64, uint64, A)
+local Fixed = @FixedLuaTable(1)
+
+local function fixed_roundtrip(x: int64): int64 <cexport,codename 'nelua_typed_fixed_roundtrip'>
+  local t: Fixed
+  t:set(LuaKey.integer(7), LuaValue.integer(x))
+  return t:get(LuaKey.integer(7)).data.i
+end
+
+local function arena_check(x: uint64): cint <cexport,codename 'nelua_typed_arena_check'>
+  local backing: Arena
+  local t <close> = T.make({arena=&backing})
+  local key: int64 = 0
+  while key < 64 and t:set(key, x - (@uint64)(key)) do
+    key = key + 1
+  end
+  if key <= 5 or key == 64 or t:len() ~= (@usize)(key) then return 1 end
+  if t:get(key):has() then return 2 end
+  for i: int64=0,<key do
+    local o = t:get(i)
+    if not o:has() or o:get() ~= x - (@uint64)(i) then return 3 end
+  end
+  if not t:set(0, x) or not t:set(0, nil) or t:get(0):has() then return 4 end
+  if t:len() ~= (@usize)(key - 1) then return 5 end
+  return 0
+end

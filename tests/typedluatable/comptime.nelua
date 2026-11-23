@@ -1,0 +1,12 @@
+## pragmas.freestanding = true
+## if typed_comptime then
+require 'typedluatable'
+require 'allocators.arena'
+local A = @ArenaAllocator(1280, 16)
+local T = @TypedLuaTable(int64, int64, *A)
+## static_assert(T.value.is_record and T.value.is_owned)
+## end
+
+local function compile_case(x: int64): int64 <cexport,codename 'nelua_typed_comptime_case'>
+  return x
+end
