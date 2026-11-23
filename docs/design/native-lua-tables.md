@@ -42,8 +42,12 @@ cycle collection, or thread safety are part of this prototype.
 - **`LuaTable(Allocator)`** has a growable open-addressed hash table with
   lazy allocation. Storage scales with populated slots and retained capacity,
   not the largest integer key. Deletions do not shrink capacity; `destroy()`
-  releases it. Hashing is deterministic and not hardened against
-  adversarial collisions. Bring an allocator supporting aligned `alloc`,
+  releases it. Buckets store compact tagged payloads (24 bytes instead of
+  48 on x86-64); string lengths stay with the separately allocated bytes.
+  Integer writes to existing scalar entries can use the inline integer
+  path without allocating or materializing tagged temporary arguments.
+  Hashing is deterministic and not hardened against adversarial
+  collisions. Bring an allocator supporting aligned `alloc`,
   zeroing `alloc0`, and `dealloc`, which must remain valid through cleanup.
 
 ```nelua

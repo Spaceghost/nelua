@@ -1,0 +1,112 @@
+require 'luatable'
+require 'allocators.general'
+require 'hashmap'
+require 'os'
+
+local D = @LuaTable(GeneralAllocator)
+local I = @hashmap(int64, int64, nil, nil, GeneralAllocator)
+local S = @hashmap(string, int64, nil, nil, GeneralAllocator)
+local keys: [16]string = {'','1','2','3','lo\0ng','long','str-6','str-7',
+                          'str-8','str-9','str-a','str-b','string-twelve','string-thirteen','é','a/long/string/key/example'}
+local missing: LuaValue
+
+local function intkey(seed: uint64, mode: int64): int64 <inline>
+  local v = (@int64)((seed >> 32) & 4095)
+  if mode == 1 then return v + 1 end
+  if mode == 2 then return (((@int64)((seed >> 32) & 255)) - 128) * 1099511627776 + 1 end
+  if mode == 4 then return v * 4294967297 end
+  return (v - 2048) * 1099511627776 + v * 104729 + 1
+end
+
+local function dynamic_run(t: *D, n: int64, mode: int64): int64
+  local s: uint64 = 17
+  local sum: int64 = 0
+  for i: int64=1,n do
+    s = s * 6364136223846793005_u64 + 1_u64
+    local k = LuaKey.integer(intkey(s, mode))
+    if mode == 3 and (s >> 55) & 1 == 0 then k = LuaKey.string(keys[(s >> 56) & 15]) end
+    if mode == 3 and (s >> 60) & 7 == 0 then
+      if not t:set(k, missing) then error('native delete failed') end
+      if t:get(k).kind ~= LuaValueKind.Nil then error('native delete retained key') end
+      sum = sum - 1
+    else
+      if not t:set(k, LuaValue.integer(i)) then error('native write failed') end
+      local v = t:get(k)
+      if v.kind ~= LuaValueKind.Integer or v.data.i ~= i then error('native lookup mismatch') end
+      sum = sum + v.data.i
+    end
+  end
+  return sum
+end
+
+local function typed_int(t: *I, k: int64, i: int64, erase: boolean): int64 <inline>
+  if erase then
+    if t:has(k) then t:remove(k) end
+    if t:peek(k) ~= nilptr then error('typed int delete retained key') end
+    return -1
+  end
+  t[k] = i
+  local p = t:peek(k)
+  if p == nilptr or $p ~= i then error('typed int lookup mismatch') end
+  return $p
+end
+local function typed_str(t: *S, k: string, i: int64, erase: boolean): int64 <inline>
+  if erase then
+    if t:has(k) then t:remove(k) end
+    if t:peek(k) ~= nilptr then error('typed string delete retained key') end
+    return -1
+  end
+  t[k] = i
+  local p = t:peek(k)
+  if p == nilptr or $p ~= i then error('typed string lookup mismatch') end
+  return $p
+end
+local function typed_run(t: *I, u: *S, n: int64, mode: int64): int64
+  local s: uint64 = 17
+  local sum: int64 = 0
+  for i: int64=1,n do
+    s = s * 6364136223846793005_u64 + 1_u64
+    local erase = mode == 3 and (s >> 60) & 7 == 0
+    if mode == 3 and (s >> 55) & 1 == 0 then
+      sum = sum + typed_str(u, keys[(s >> 56) & 15], i, erase)
+    else
+      sum = sum + typed_int(t, intkey(s, mode), i, erase)
+    end
+  end
+  return sum
+end
+local function trial(d: *D, t: *I, u: *S, mode: int64, n: int64, dynamic: boolean): int64
+  local start = os.clock()
+  if dynamic then
+    local sum = dynamic_run(d,n,mode)
+    print(mode, 'dynamic', os.clock()-start, sum)
+    return sum
+  end
+  local sum = typed_run(t,u,n,mode)
+  print(mode, 'typed', os.clock()-start, sum)
+  return sum
+end
+
+
+for mode: int64=1,4 do
+  local n: int64 = 1500000
+  local warm: int64 = 200000
+  if mode == 2 then n, warm = 180000, 20000 end
+  if mode == 4 then n, warm = 300000, 60000 end
+  local d <close> = D.make(general_allocator)
+  local t = I.make(general_allocator)
+  local u = S.make(general_allocator)
+  local a = dynamic_run(&d,warm,mode)
+  local b = typed_run(&t,&u,warm,mode)
+  if a ~= b or d:len() ~= (#t+#u) then error('warm state mismatch') end
+  for i=1,5 do
+    if i % 2 == 0 then
+      a = trial(&d,&t,&u,mode,n,true); b = trial(&d,&t,&u,mode,n,false)
+    else
+      b = trial(&d,&t,&u,mode,n,false); a = trial(&d,&t,&u,mode,n,true)
+    end
+    if a ~= b or d:len() ~= (#t+#u) then error('timed state mismatch') end
+  end
+  t:destroy()
+  u:destroy()
+end

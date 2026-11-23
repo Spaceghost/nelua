@@ -89,31 +89,67 @@ local Entry = @record{key: LuaKey, value: LuaValue}
 ## end
 global FixedLuaTable: type = #[generalize(make_fixed)]#
 
--- Dynamic tables use a native open-addressed hash table; nothing proportional
--- to the numeric key and no tombstones to accumulate after repeated erasures.
-local function hashkey(key: LuaKey): usize <inline>
-  local h: uint64
-  if key.kind == LuaKeyKind.Integer then
-    h = (@uint64)(key.data.i)
-  else
-    h = 0xcbf29ce484222325_u64
-    local s = key.data.s
-    for i: usize=0,<s.size do
-      h = (h ~ (@uint64)(s.data[i])) * 0x100000001b3_u64
-    end
+-- Dynamic buckets hold two machine payloads and tags. Strings carry their
+-- length in the same owned allocation as the bytes, not in every bucket.
+local StoredText = @record{size: usize}
+local StoredKey = @union{i: int64, s: *StoredText}
+local StoredValue = @union{i: int64, n: float64, b: boolean, s: *StoredText}
+local Bucket = @record{key: StoredKey, value: StoredValue, keykind: LuaKeyKind, valkind: LuaValueKind}
+
+local function view(text: *StoredText): string <inline>
+  if text == nilptr then return '' end
+  return {data=&(@*[0]byte)(text)[#StoredText],size=text.size}
+end
+
+local function hashint(key: int64): usize <inline>
+  local h = (@uint64)(key)
+  h = (h ~ (h >> 30)) * 0xbf58476d1ce4e5b9_u64
+  return (@usize)(h ~ (h >> 31))
+end
+
+local function hashtext(text: string): usize <inline>
+  local h: uint64 = 0xcbf29ce484222325_u64
+  for i: usize=0,<text.size do
+    h = (h ~ (@uint64)(text.data[i])) * 0x100000001b3_u64
   end
-  -- Mix high bits down before reducing to a power-of-two slot index.
   h = (h ~ (h >> 30)) * 0xbf58476d1ce4e5b9_u64
   h = (h ~ (h >> 27)) * 0x94d049bb133111eb_u64
   return (@usize)(h ~ (h >> 31))
 end
 
-local function find(entries: *[0]Entry, mask: usize, key: LuaKey): usize <inline>
-  local i = hashkey(key) & mask
-  while entries[i].key.kind ~= LuaKeyKind.Empty and not equalkey(entries[i].key, key) do
+local function find_int(entries: *[0]Bucket, mask: usize, key: int64): usize <inline>
+  local i = hashint(key) & mask
+  while true do
+    local entry = &entries[i]
+    local kind = entry.keykind
+    if kind == LuaKeyKind.Integer then
+      if entry.key.i == key then return i end
+    elseif kind == LuaKeyKind.Empty then
+      return i
+    end
+    i = (i + 1) & mask
+  end
+end
+
+local function find_text(entries: *[0]Bucket, mask: usize, key: string): usize <inline>
+  local i = hashtext(key) & mask
+  while entries[i].keykind ~= LuaKeyKind.Empty and
+        (entries[i].keykind ~= LuaKeyKind.String or view(entries[i].key.s) ~= key) do
     i = (i + 1) & mask
   end
   return i
+end
+
+local function find(entries: *[0]Bucket, mask: usize, key: LuaKey): usize <inline>
+  if key.kind == LuaKeyKind.Integer then return find_int(entries, mask, key.data.i) end
+  return find_text(entries, mask, key.data.s)
+end
+
+local function scalar(value: LuaValue): StoredValue <inline>
+  if value.kind == LuaValueKind.Integer then return {i=value.data.i} end
+  if value.kind == LuaValueKind.Number then return {n=value.data.n} end
+  if value.kind == LuaValueKind.Boolean then return {b=value.data.b} end
+  return (@StoredValue){}
 end
 
 ## local function make_dynamic(A)
@@ -121,7 +157,7 @@ end
   local Allocator: type = #[A]#
   local T <owned> = @record{
     allocator: Allocator,
-    entries: *[0]Entry,
+    entries: *[0]Bucket,
     capacity: usize,
     size: usize
   }
@@ -130,40 +166,49 @@ end
     return (@T){allocator=allocator}
   end
 
-  local function clone(self: *T, text: string): string <inline>
-    if text.size == 0 then return '' end
-    if text.size == (@usize)(-1) then return '' end
-    local data = (@*[0]byte)(self.allocator:alloc(text.size + 1))
-    if data == nilptr then return '' end
+  local function clone(self: *T, text: string): *StoredText <inline>
+    if text.size == 0 or text.size > (@usize)(-1) - #StoredText - 1 then return nilptr end
+    local owned = (@*StoredText)(self.allocator:alloc(#StoredText + text.size + 1))
+    if owned == nilptr then return nilptr end
+    owned.size = text.size
+    local data = (@*[0]byte)(&(@*[0]byte)(owned)[#StoredText])
     for i: usize=0,<text.size do data[i] = text.data[i] end
     data[text.size] = 0
-    return {data=data,size=text.size}
+    return owned
   end
 
-  local function droptext(self: *T, text: string): void <inline>
-    if text.size ~= 0 then self.allocator:dealloc(text.data) end
+  local function droptext(self: *T, text: *StoredText): void <inline>
+    if text ~= nilptr then self.allocator:dealloc(text) end
   end
 
-  local function dropvalue(self: *T, value: LuaValue): void <inline>
-    if value.kind == LuaValueKind.String then droptext(self, value.data.s) end
+  local function dropvalue(self: *T, entry: *Bucket): void <inline>
+    if entry.valkind == LuaValueKind.String then droptext(self, entry.value.s) end
   end
 
-  local function dropkey(self: *T, key: LuaKey): void <inline>
-    if key.kind == LuaKeyKind.String then droptext(self, key.data.s) end
+  local function dropkey(self: *T, entry: *Bucket): void <inline>
+    if entry.keykind == LuaKeyKind.String then droptext(self, entry.key.s) end
+  end
+
+  local function bucket_hash(entry: *Bucket): usize <inline>
+    if entry.keykind == LuaKeyKind.Integer then return hashint(entry.key.i) end
+    return hashtext(view(entry.key.s))
   end
 
   local function grow(self: *T): boolean
     local n: usize = 8
     if self.capacity ~= 0 then
-      if self.capacity > ((@usize)(-1) // #Entry) // 2 then return false end
+      if self.capacity > ((@usize)(-1) // #Bucket) // 2 then return false end
       n = self.capacity * 2
     end
-    local entries = (@*[0]Entry)(self.allocator:alloc0(n * #Entry))
+    local entries = (@*[0]Bucket)(self.allocator:alloc0(n * #Bucket))
     if entries == nilptr then return false end
+    local mask = n - 1
     for i: usize=0,<self.capacity do
-      local entry = self.entries[i]
-      if entry.key.kind ~= LuaKeyKind.Empty then
-        entries[find(entries, n - 1, entry.key)] = entry
+      local entry = &self.entries[i]
+      if entry.keykind ~= LuaKeyKind.Empty then
+        local pos = bucket_hash(entry) & mask
+        while entries[pos].keykind ~= LuaKeyKind.Empty do pos = (pos + 1) & mask end
+        entries[pos] = $entry
       end
     end
     if self.entries ~= nilptr then self.allocator:dealloc(self.entries) end
@@ -173,18 +218,18 @@ end
 
   local function erase(self: *T, hole: usize): void
     local mask = self.capacity - 1
-    dropkey(self, self.entries[hole].key)
-    dropvalue(self, self.entries[hole].value)
+    dropkey(self, &self.entries[hole])
+    dropvalue(self, &self.entries[hole])
     local i = (hole + 1) & mask
-    while self.entries[i].key.kind ~= LuaKeyKind.Empty do
-      local home = hashkey(self.entries[i].key) & mask
+    while self.entries[i].keykind ~= LuaKeyKind.Empty do
+      local home = bucket_hash(&self.entries[i]) & mask
       if ((hole - home) & mask) < ((i - home) & mask) then
         self.entries[hole] = self.entries[i]
         hole = i
       end
       i = (i + 1) & mask
     end
-    self.entries[hole] = (@Entry){}
+    self.entries[hole] = (@Bucket){}
     self.size = self.size - 1
   end
 
@@ -194,7 +239,13 @@ end
 
   function T:get(key: LuaKey): LuaValue <inline>
     if self.capacity == 0 or not validkey(key) then return (@LuaValue){} end
-    return self.entries[find(self.entries, self.capacity - 1, key)].value
+    local entry = &self.entries[find(self.entries, self.capacity - 1, key)]
+    local kind = entry.valkind
+    if kind == LuaValueKind.Integer then return LuaValue.integer(entry.value.i) end
+    if kind == LuaValueKind.Boolean then return LuaValue.boolean(entry.value.b) end
+    if kind == LuaValueKind.Number then return LuaValue.number(entry.value.n) end
+    if kind == LuaValueKind.String then return LuaValue.string(view(entry.value.s)) end
+    return (@LuaValue){}
   end
 
   local function set_cold(self: *T, key: LuaKey, value: LuaValue, i: usize, found: boolean): boolean <noinline>
@@ -202,49 +253,86 @@ end
       if found then erase(self, i) end
       return true
     end
-    -- Copy both borrowed strings before any mutation. The input may itself
-    -- reference a current table value, including the value being replaced.
+
+    local stored: StoredValue
     if value.kind == LuaValueKind.String then
+      -- The argument may borrow the current value, so copy before freeing it.
       local text = clone(self, value.data.s)
-      if text.size ~= value.data.s.size then return false end
-      value.data.s = text
+      if text == nilptr and value.data.s.size ~= 0 then return false end
+      stored.s = text
+    else
+      stored = scalar(value)
     end
     if found then
-      dropvalue(self, self.entries[i].value)
-      self.entries[i].value = value
+      local entry = &self.entries[i]
+      dropvalue(self, entry)
+      entry.value, entry.valkind = stored, value.kind
       return true
     end
+
+    local entry: Bucket = {keykind=key.kind,value=stored,valkind=value.kind}
     if key.kind == LuaKeyKind.String then
       local text = clone(self, key.data.s)
-      if text.size ~= key.data.s.size then
-        dropvalue(self, value)
+      if text == nilptr and key.data.s.size ~= 0 then
+        dropvalue(self, &entry)
         return false
       end
-      key.data.s = text
+      entry.key.s = text
+    else
+      entry.key.i = key.data.i
     end
+
     if self.size >= self.capacity - self.capacity // 4 then
       if not grow(self) then
-        dropkey(self, key)
-        dropvalue(self, value)
+        dropkey(self, &entry)
+        dropvalue(self, &entry)
         return false
       end
-      i = find(self.entries, self.capacity - 1, key)
+      -- For a new insertion we already proved there is no equal key.
+      local mask = self.capacity - 1
+      i = bucket_hash(&entry) & mask
+      while self.entries[i].keykind ~= LuaKeyKind.Empty do i = (i + 1) & mask end
     end
-    self.entries[i] = {key=key,value=value}
+    self.entries[i] = entry
     self.size = self.size + 1
     return true
   end
 
+  local function set_int_cold(self: *T, key: int64, value: int64, i: usize, found: boolean): boolean <noinline>
+    return set_cold(self, LuaKey.integer(key), LuaValue.integer(value), i, found)
+  end
+
+  local function set_int(self: *T, key: int64, value: int64): boolean <inline>
+    local i: usize = 0
+    local found = false
+    if self.capacity ~= 0 then
+      i = find_int(self.entries, self.capacity - 1, key)
+      local entry = &self.entries[i]
+      found = entry.keykind ~= LuaKeyKind.Empty
+      if found and entry.valkind ~= LuaValueKind.String then
+        entry.value.i, entry.valkind = value, LuaValueKind.Integer
+        return true
+      end
+    end
+    return set_int_cold(self, key, value, i, found)
+  end
+
   function T:set(key: LuaKey, value: LuaValue): boolean <inline>
+    -- Constant tags fold at the call site; the integer hot path never spills
+    -- temporary tagged key/value descriptors to make a possible slow call.
+    if key.kind == LuaKeyKind.Integer and value.kind == LuaValueKind.Integer then
+      return set_int(self, key.data.i, value.data.i)
+    end
     if not validkey(key) then return false end
     local i: usize = 0
     local found = false
     if self.capacity ~= 0 then
       i = find(self.entries, self.capacity - 1, key)
-      found = self.entries[i].key.kind ~= LuaKeyKind.Empty
+      local entry = &self.entries[i]
+      found = entry.keykind ~= LuaKeyKind.Empty
       if found and value.kind ~= LuaValueKind.Nil and value.kind ~= LuaValueKind.String and
-         self.entries[i].value.kind ~= LuaValueKind.String then
-        self.entries[i].value = value
+         entry.valkind ~= LuaValueKind.String then
+        entry.value, entry.valkind = scalar(value), value.kind
         return true
       end
     end
@@ -253,9 +341,10 @@ end
 
   function T:destroy(): void
     for i: usize=0,<self.capacity do
-      if self.entries[i].key.kind ~= LuaKeyKind.Empty then
-        dropkey(self, self.entries[i].key)
-        dropvalue(self, self.entries[i].value)
+      local entry = &self.entries[i]
+      if entry.keykind ~= LuaKeyKind.Empty then
+        dropkey(self, entry)
+        dropvalue(self, entry)
       end
     end
     if self.entries ~= nilptr then self.allocator:dealloc(self.entries) end
