@@ -110,13 +110,13 @@ local INVALID_INDEX: usize <comptime> = (@usize)(-1)
   ]]
 
   -- Release the values of all filled nodes (owned values only).
+  ## if close_values then
   local function hashmapT_drop_all(self: *hashmapT): void <inline>
-    ## if close_values then
     for i: usize = 0, < self.nodes.size do
       if self.nodes[i].filled then self.nodes[i].value:__close() end
     end
-    ## end
   end
+  ## end
 
   --[[
   Creates a hash map using a custom allocator instance.
@@ -134,7 +134,9 @@ local INVALID_INDEX: usize <comptime> = (@usize)(-1)
   *Complexity*: O(1).
   ]]
   function hashmapT:destroy(): void
+    ## if close_values then
     hashmapT_drop_all(self)
+    ## end
     self.allocator:spandealloc(self.buckets)
     self.allocator:spandealloc(self.nodes)
     self.buckets = (@span(usize))()
@@ -155,7 +157,9 @@ local INVALID_INDEX: usize <comptime> = (@usize)(-1)
   *Complexity*: O(n).
   ]]
   function hashmapT:clear(): void
+    ## if close_values then
     hashmapT_drop_all(self)
+    ## end
     self.size = 0
     memory.spanset(self.buckets, INVALID_INDEX)
     -- link free nodes

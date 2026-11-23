@@ -52,14 +52,14 @@ require 'span'
   end
   ]]
 
-  -- Release elements [from, to) of an owned element type (no-op otherwise).
+  -- Release elements [from, to) of an owned element type.
+  ## if close_elements then
   local function vectorT_drop(self: *vectorT, from: usize, to: usize): void <inline>
-    ## if close_elements then
     for i: usize = from, < to do
       self.data[i]:__close()
     end
-    ## end
   end
+  ## end
 
   -- Concept matching fixed arrays of T.
   local an_arrayT: type = #[concept(function(x)
@@ -91,7 +91,9 @@ require 'span'
   The internal storage buffer is not freed, and it may be reused.
   ]]
   function vectorT:clear(): void
+    ## if close_elements then
     vectorT_drop(self, 0, self.size)
+    ## end
     self.size = 0
   end
 
@@ -100,7 +102,9 @@ require 'span'
   Useful only when not using the garbage collector.
   ]]
   function vectorT:destroy(): void
+    ## if close_elements then
     vectorT_drop(self, 0, self.size)
+    ## end
     self.allocator:spandealloc(self.data)
     self.data = (@span(T))()
     self.size = 0
@@ -126,7 +130,9 @@ require 'span'
     if n > self.size then
       memory.zero(&self.data[self.size], (n - self.size) * #T)
     else
+      ## if close_elements then
       vectorT_drop(self, n, self.size)
+      ## end
     end
     self.size = n
   end
@@ -253,7 +259,9 @@ require 'span'
         if j ~= i then self.data[j] = move(self.data[i]) end
         j = j + 1
       else
+        ## if close_elements then
         vectorT_drop(self, i, i + 1)
+        ## end
       end
     end
     self.size = j

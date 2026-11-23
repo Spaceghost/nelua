@@ -21,12 +21,13 @@ local aster = require 'nelua.aster'
 
 local ownership = {}
 
+-- Shared empty snapshots are read-only. A move allocates a private map.
+local empty = {}
 local function copystate(state)
+  if not state or state == empty or not next(state) then return empty end
   local copy = {}
-  if state then
-    for symbol, entry in pairs(state) do
-      copy[symbol] = entry
-    end
+  for symbol, entry in pairs(state) do
+    copy[symbol] = entry
   end
   return copy
 end
@@ -49,7 +50,7 @@ function ownership.enter_function(context)
 end
 
 function ownership.reset(context)
-  context.ownstate = {}
+  context.ownstate = empty
   context.ownloops = nil
 end
 
@@ -62,7 +63,7 @@ end
 -- 'maybe' when only some did (or some path moved it only maybe).
 local function merge_states(states)
   local n = #states
-  local result = {}
+  local result = empty
   for i=1,n do
     for symbol, entry in pairs(states[i]) do
       if not result[symbol] then
@@ -76,6 +77,7 @@ local function merge_states(states)
             end
           end
         end
+        if result == empty then result = {} end
         result[symbol] = {state = (count == n and allmoved) and 'moved' or 'maybe', node = entry.node}
       end
     end
@@ -275,7 +277,7 @@ end
 
 function ownership.mark_moved(context, symbol, node)
   local state = context.ownstate
-  if not state then
+  if not state or state == empty then
     state = {}
     context.ownstate = state
   end
@@ -299,13 +301,13 @@ local function lvalue_text(node)
 end
 
 -- Rule 1: copying an lvalue of an owned type needs `move`. `where` is the message prefix.
-function ownership.check_copy(context, valnode, where)
+function ownership.check_copy(context, valnode, where, ...)
   local attr = valnode.attr
   local type = attr.type
   if not (type and type.is_owned and attr.lvalue) or valnode.moveoperand then return end
   local text = lvalue_text(valnode)
   valnode:raisef("%s: '%s' has owned type '%s', write `move(%s)` to transfer ownership or take a pointer with `&%s`",
-    where, text, type, text, text)
+    string.format(where, ...), text, type, text, text)
 end
 
 local function scope_within(scope, ancestor)
@@ -321,7 +323,7 @@ Rule 1 for `return` (and `in`): returning a plain local of the function (or of t
 expression `ownerscope`) is a move, any other owned lvalue needs `move`.
 Returning a `<close>` local is an error, its deferred `__close` would run on the returned value.
 ]]
-function ownership.check_return(context, retnode, ownerscope, where)
+function ownership.check_return(context, retnode, ownerscope, where, ...)
   local attr = retnode.attr
   local type = attr.type
   if not (type and type.is_owned and attr.lvalue) or retnode.moveoperand then return end
@@ -329,12 +331,12 @@ function ownership.check_return(context, retnode, ownerscope, where)
   if retnode.is_Id and attr.scope and scope_within(attr.scope, ownerscope) then
     if attr.close then
       retnode:raisef("%s: cannot return '%s' of owned type '%s', it is a <close> variable \z
-        and its deferred __close would run on the returned value", where, text, type)
+        and its deferred __close would run on the returned value", string.format(where, ...), text, type)
     end
     return
   end
   retnode:raisef("%s: '%s' has owned type '%s' and is not a local of this block, write `move(%s)` to transfer ownership",
-    where, text, type, text)
+    string.format(where, ...), text, type, text)
 end
 
 --[[

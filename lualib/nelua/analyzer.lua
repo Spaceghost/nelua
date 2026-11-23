@@ -334,7 +334,7 @@ local function visitor_Array_literal(context, node, littype)
         childnode:raisef("in array literal at index %d: cannot pass non copyable type '%s' by value",
           i, childtype)
       end
-      ownership.check_copy(context, childnode, string.format("in array literal at index %d", i))
+      ownership.check_copy(context, childnode, "in array literal at index %d", i)
     end
     sideeffect = sideeffect or childattr.sideeffect
     comptime = comptime and childattr.comptime
@@ -418,7 +418,7 @@ local function visitor_Record_literal(context, node, littype)
         childnode:raisef("in record literal field '%s': cannot pass non copyable type '%s' by value",
           fieldname, fieldvaltype)
       end
-      ownership.check_copy(context, fieldvalnode, string.format("in record literal field '%s'", fieldname))
+      ownership.check_copy(context, fieldvalnode, "in record literal field '%s'", fieldname)
     end
     local member = constant_member(fieldvalattr, fieldtype)
     if member then value.fields[fieldname] = member else knownvalue = nil end
@@ -479,7 +479,7 @@ local function visitor_Union_literal(context, node, littype)
         childnode:raisef("in record literal field '%s': cannot pass non copyable type '%s' by value",
           fieldname, fieldvaltype)
       end
-      ownership.check_copy(context, fieldvalnode, string.format("in union literal field '%s'", fieldname))
+      ownership.check_copy(context, fieldvalnode, "in union literal field '%s'", fieldname)
     end
     if not fieldvalattr.comptime then
       comptime = nil
@@ -1691,7 +1691,7 @@ local function visitor_Call(context, node, argnodes, calleetype, calleesym, call
         end
         if not selftype.is_pointer then
           ownership.check_copy(context, calleeobjnode,
-            string.format("in method call '%s' at argument 'self'", calleename))
+            "in method call '%s' at argument 'self'", calleename)
         end
         table.remove(pseudoargtypes, 1)
         table.remove(pseudoargattrs, 1)
@@ -1791,7 +1791,7 @@ local function visitor_Call(context, node, argnodes, calleetype, calleesym, call
           -- builtins (`print`, `assert`, ...) never take ownership of their arguments
           if argnode and not wantedtype.is_pointer and not (calleesym and calleesym.builtin) then
             ownership.check_copy(context, argnode,
-              string.format("in call of function '%s' at argument %d", calleename, i))
+              "in call of function '%s' at argument %d", calleename, i)
           end
         else
           knownallargs = false
@@ -3115,7 +3115,7 @@ function visitors.VarDecl(context, node)
           valnode:raisef("cannot assign non copyable type '%s'", valtype)
         end
         if valnode then
-          ownership.check_copy(context, valnode, string.format("in variable '%s' declaration", symbol.name))
+          ownership.check_copy(context, valnode, "in variable '%s' declaration", symbol.name)
         end
         if vartype.is_polyfunction then
           -- skip declaration for poly function aliases
@@ -3235,7 +3235,7 @@ function visitors.Return(context, node)
                   i, rettype)
               end
               if retnode then
-                ownership.check_return(context, retnode, funcscope, string.format("return at index %d", i))
+                ownership.check_return(context, retnode, funcscope, "return at index %d", i)
               end
             end
           end
@@ -3259,7 +3259,7 @@ function visitors.Return(context, node)
         funcscope:add_return_value(i, retnode.attr.value)
       end
       if retnode then
-        ownership.check_return(context, retnode, funcscope, string.format("return at index %d", i))
+        ownership.check_return(context, retnode, funcscope, "return at index %d", i)
       end
     end
   end
