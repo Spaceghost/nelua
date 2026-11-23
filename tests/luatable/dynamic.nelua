@@ -1,0 +1,96 @@
+require 'luatable'
+require 'allocators.general'
+require 'string'
+
+local T = @LuaTable(GeneralAllocator)
+
+do
+  local t = T.make(general_allocator)
+  local alias = &t
+  local sparse: int64 = 1099511627776
+  local absent: LuaValue
+  local i1 = LuaKey.integer(1)
+  local s1 = LuaKey.string('1')
+  local sk = LuaKey.integer(sparse)
+  print(t:get(sk).kind == LuaValueKind.Nil)
+  assert(t:len() == 0)
+  assert(t:set(sk, LuaValue.boolean(false)))
+  print(t:get(sk).kind == LuaValueKind.Boolean and not t:get(sk).data.b)
+  print(t:get(LuaKey.integer(sparse + 1)).kind == LuaValueKind.Nil)
+  assert(t:len() == 1)
+  assert(t:set(i1, LuaValue.integer(17)))
+  assert(t:set(s1, LuaValue.string('string-key')))
+  print(t:get(i1).data.i)
+  print(t:get(s1).data.s)
+  assert(t:set(LuaKey.string('a\0b'), LuaValue.string('nul-key')))
+  print(t:get(LuaKey.string('a\0b')).data.s)
+  print(t:get(LuaKey.string('a')).kind == LuaValueKind.Nil)
+  assert(alias:set(i1, LuaValue.integer(29)))
+  print(t:get(i1).data.i)
+  assert(alias:set(i1, absent))
+  print(t:get(i1).kind == LuaValueKind.Nil)
+  print(t:get(s1).data.s)
+  assert(t:set(sk, absent))
+  print(t:get(sk).kind == LuaValueKind.Nil)
+  for i: int64 = 1, 1024 do assert(t:set(LuaKey.integer(i * 4099), LuaValue.integer(i))) end
+  local sum: int64 = 0
+  for i: int64 = 1, 1024 do sum = sum + t:get(LuaKey.integer(i * 4099)).data.i end
+  print(sum)
+  for i: int64 = 1, 1024, 2 do assert(t:set(LuaKey.integer(i * 4099), absent)) end
+  print(t:get(LuaKey.integer(4099)).kind == LuaValueKind.Nil)
+  print(t:get(LuaKey.integer(8198)).data.i)
+  assert(t:set(LuaKey.integer(4099), LuaValue.integer(3)))
+  print(t:get(LuaKey.integer(4099)).data.i)
+  -- Overwrite from a string returned by this very table. Reading a borrowed
+  -- result after replacement isn't guaranteed to work; copying it into set is.
+  assert(t:set(s1, t:get(s1)))
+  assert(t:get(s1).data.s == 'string-key')
+  assert(t:set(LuaKey.string(t:get(s1).data.s), LuaValue.boolean(true)))
+  assert(t:get(LuaKey.string('string-key')):truthy())
+  t:destroy()
+  assert(t:len() == 0)
+end
+
+do
+  local t <close> = T.make(general_allocator)
+  local table_ref = &t
+  local empty: LuaValue
+  local seed: int64 = 197
+  local function step(s: *int64): int64
+    $s = ($s * 48271) % 2147483647
+    return $s
+  end
+  local function numeric_key(i: int64): LuaKey
+    return LuaKey.integer(i * 524287 - 1000000000)
+  end
+  local function write(i: int64, v: LuaValue): boolean
+    if i % 2 == 0 then return table_ref:set(numeric_key(i), v) end
+    local s <close> = tostring(i)
+    return table_ref:set(LuaKey.string(s), v)
+  end
+  local function read(i: int64): LuaValue
+    if i % 2 == 0 then return table_ref:get(numeric_key(i)) end
+    local s <close> = tostring(i)
+    return table_ref:get(LuaKey.string(s))
+  end
+  for i = 1, 8192 do
+    local slot = step(&seed) % 256
+    if step(&seed) % 3 == 0 then assert(write(slot, empty))
+    else assert(write(slot, LuaValue.integer(step(&seed) % 1000))) end
+    if i % 256 == 0 then
+      local live: usize = 0
+      for j: int64 = 0, 255 do
+        local v = read(j)
+        if v.kind ~= LuaValueKind.Nil then
+          assert(v.kind == LuaValueKind.Integer)
+          print(v.data.i)
+          live = live + 1
+        else
+          print(-1)
+        end
+      end
+      assert(t:len() == live)
+      print(live)
+    end
+  end
+end

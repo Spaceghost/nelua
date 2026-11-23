@@ -1,0 +1,122 @@
+require 'luatable'
+require 'allocators.general'
+
+local Tracker = @record{allocations: integer, releases: integer, attempts: integer, fail_at: integer}
+local TestingAllocator = @record{tracker: *Tracker}
+function TestingAllocator:alloc(n: usize): pointer
+  self.tracker.attempts = self.tracker.attempts + 1
+  if self.tracker.attempts == self.tracker.fail_at then return nilptr end
+  local p = general_allocator:alloc(n)
+  if p ~= nilptr then self.tracker.allocations = self.tracker.allocations + 1 end
+  return p
+end
+function TestingAllocator:alloc0(n: usize): pointer
+  local p = (@*[0]byte)(self:alloc(n))
+  if p ~= nilptr then
+    for i: usize=0,<n do p[i] = 0 end
+  end
+  return p
+end
+function TestingAllocator:dealloc(p: pointer): void
+  self.tracker.releases = self.tracker.releases + 1
+  general_allocator:dealloc(p)
+end
+
+local D = @LuaTable(TestingAllocator)
+local missing: LuaValue
+local nkey = LuaKey.integer(1)
+local skey = LuaKey.string('1')
+local emptykey = LuaKey.string('')
+local largekey = LuaKey.integer(0x7fffffffffffffff_i64)
+
+do
+  local F = @FixedLuaTable(3)
+  local t: F
+  local alias: *F = &t
+  assert(t:len() == 0 and t:get(nkey).kind == LuaValueKind.Nil)
+  assert(not t:get(nkey):truthy())
+  assert(t:set(nkey, LuaValue.boolean(false)))
+  assert(t:get(nkey).kind == LuaValueKind.Boolean and not t:get(nkey):truthy())
+  assert(alias:set(skey, LuaValue.boolean(true)))
+  assert(t:get(skey):truthy() and not t:get(nkey):truthy())
+  assert(t:set(largekey, LuaValue.number(1.5)))
+  assert(t:get(largekey).data.n == 1.5)
+  assert(not t:set(emptykey, LuaValue.integer(8)))
+  assert(t:len() == 3 and alias:set(nkey, missing))
+  assert(t:set(emptykey, LuaValue.integer(0)) and t:get(emptykey):truthy())
+  assert(not t:set((@LuaKey){}, LuaValue.integer(0)))
+  assert(t:get((@LuaKey){}).kind == LuaValueKind.Nil)
+  assert(t:set(nkey, missing) and t:len() == 3)
+end
+
+do
+  local tracker: Tracker
+  do
+    local d <close> = D.make({tracker=&tracker})
+    local alias: *D = &d
+    assert(alias:set(skey, missing) and d:get(skey).kind == LuaValueKind.Nil)
+    assert(tracker.attempts == 0)
+    for tries: integer=1,3 do -- value copy, key copy and initial bucket allocation
+      tracker.fail_at = tracker.attempts + tries
+      assert(not d:set(skey, LuaValue.string('value')))
+      assert(d:len() == 0 and d:get(skey).kind == LuaValueKind.Nil)
+      assert(tracker.allocations == tracker.releases)
+    end
+    tracker.fail_at = 0
+    local input: [3]byte = {97,0,98}
+    local view: string = {data=(@*[0]byte)(&input),size=3}
+    assert(d:set(LuaKey.string(view), LuaValue.string(view)))
+    input[0] = 99
+    assert(d:get(LuaKey.string(view)).kind == LuaValueKind.Nil)
+    local binary = LuaKey.string('a\0b')
+    local answer = d:get(binary)
+    assert(answer.kind == LuaValueKind.String and answer.data.s == 'a\0b')
+    assert(answer.data.s.data[3] == 0)
+    assert(d:set(binary, answer)) -- replace using the table's own borrowed value
+    assert(d:get(binary).data.s == 'a\0b')
+    tracker.fail_at = tracker.attempts + 1
+    assert(not d:set(binary, LuaValue.string('different')))
+    assert(d:get(binary).data.s == 'a\0b')
+    tracker.fail_at = 0
+    assert(d:set(emptykey, LuaValue.string('')))
+    assert(d:get(emptykey).kind == LuaValueKind.String and d:get(emptykey):truthy())
+    assert(d:set(nkey, LuaValue.boolean(false)))
+    assert(alias:set(skey, LuaValue.boolean(true)))
+    assert(d:get(skey):truthy() and not d:get(nkey):truthy())
+    assert(d:set(largekey, LuaValue.number(2.25)))
+    assert(d:set(LuaKey.integer(-9223372036854775807_i64 - 1), LuaValue.integer(9)))
+    assert(d:len() == 6 and d:get(largekey).data.n == 2.25)
+    tracker.fail_at = tracker.attempts + 3 -- fail growth, reclaim newly copied strings
+    local live = tracker.allocations - tracker.releases
+    assert(not d:set(LuaKey.string('new'), LuaValue.string('new value')))
+    assert(d:len() == 6 and d:get(binary).data.s == 'a\0b')
+    assert(tracker.allocations - tracker.releases == live)
+    tracker.fail_at = 0
+
+    -- Sparse integer keys, repeated rehashes and delete/reinsert across clusters.
+    for cycle: integer=1,3 do
+      for i: int64=1,500 do
+        assert(alias:set(LuaKey.integer(i * 10000000007_i64), LuaValue.integer(i * cycle)))
+      end
+      assert(d:len() == 506)
+      for i: int64=2,500,2 do
+        assert(d:set(LuaKey.integer(i * 10000000007_i64), missing))
+      end
+      assert(d:len() == 256 and d:get(binary).data.s == 'a\0b')
+      for i: int64=1,500 do
+        local v = d:get(LuaKey.integer(i * 10000000007_i64))
+        if i % 2 == 0 then assert(v.kind == LuaValueKind.Nil)
+        else assert(v.kind == LuaValueKind.Integer and v.data.i == i * cycle) end
+      end
+    end
+    assert(d:set(binary, missing))
+    assert(d:get(binary).kind == LuaValueKind.Nil)
+    d:destroy()
+    d:destroy()
+    assert(d:len() == 0 and tracker.allocations == tracker.releases)
+    assert(d:set(skey, LuaValue.string('reusable')))
+  end -- explicit <close> releases the final owned table
+  assert(tracker.allocations == tracker.releases)
+end
+
+print('luatable OK!')

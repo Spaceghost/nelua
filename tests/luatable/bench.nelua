@@ -1,0 +1,62 @@
+-- Run: ./nelua -r tests/luatable/bench.nelua
+-- Measures CPU time after warming each map. Rows are not perf gates.
+require 'luatable'
+require 'allocators.general'
+require 'hashmap'
+require 'os'
+
+local dynamic_type = @LuaTable(GeneralAllocator)
+local typed_type = @hashmap(int64, int64, nil, nil, GeneralAllocator)
+local function dynamic_run(t: *dynamic_type, n: int64): int64
+  local sum: int64 = 0
+  local s: uint64 = 17
+  for i: int64 = 1, n do
+    s = s * 6364136223846793005_u64 + 1_u64
+    local k = LuaKey.integer((@int64)((s >> 32) & 4095) * 104729)
+    if not t:set(k, LuaValue.integer(i)) then error('dynamic table rejected a write') end
+    local v = t:get(k)
+    if v.kind ~= LuaValueKind.Integer then error('dynamic table missed a write') end
+    sum = sum + v.data.i
+  end
+  return sum
+end
+
+local function typed_run(t: *typed_type, n: int64): int64
+  local sum: int64 = 0
+  local s: uint64 = 17
+  for i: int64 = 1, n do
+    s = s * 6364136223846793005_u64 + 1_u64
+    local k = (@int64)((s >> 32) & 4095) * 104729
+    t[k] = i
+    local v = t:peek(k)
+    if v == nilptr then error('typed map missed a write') end
+    sum = sum + $v
+  end
+  return sum
+end
+
+local n: int64 = 2000000
+local dynamic <close> = dynamic_type.make(general_allocator)
+local typed = typed_type.make(general_allocator)
+dynamic_run(&dynamic, 200000)
+typed_run(&typed, 200000)
+if dynamic:len() ~= 4096 or #typed ~= 4096 then error('workload must warm all keys') end
+local function dynamic_trial(): int64
+  local tick = os.clock()
+  local sum = dynamic_run(&dynamic, n)
+  print('dynamic', os.clock() - tick, sum)
+  return sum
+end
+local function typed_trial(): int64
+  local tick = os.clock()
+  local sum = typed_run(&typed, n)
+  print('typed', os.clock() - tick, sum)
+  return sum
+end
+for trial = 1, 7 do
+  local a, b: int64
+  if trial % 2 == 0 then a = dynamic_trial(); b = typed_trial()
+  else b = typed_trial(); a = dynamic_trial() end
+  if a ~= b or a ~= (n * (n + 1) // 2) then error('workload checksums disagree') end
+end
+typed:destroy()

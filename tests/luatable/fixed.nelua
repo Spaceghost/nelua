@@ -1,0 +1,16 @@
+## pragmas.freestanding = true
+require 'luatable'
+
+-- This exported entry point accepts a caller-supplied value. Keep it separate
+-- from the C test driver so constant folding cannot optimize the whole test.
+local function fixed(x: int64): int64 <cexport, codename 'nelua_table_fixed'>
+  local t: FixedLuaTable(1)
+  local k = LuaKey.integer(5)
+  t:set(k, LuaValue.integer(x + 1))
+  t:set(k, LuaValue.integer(x))
+  return t:get(k).data.i
+end
+
+local function scalar(x: int64): int64 <cexport, codename 'nelua_table_scalar'>
+  return x
+end

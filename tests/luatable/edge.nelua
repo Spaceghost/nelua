@@ -1,0 +1,78 @@
+require 'luatable'
+require 'allocators.general'
+
+do
+  local f: FixedLuaTable(1)
+  local x = LuaKey.string('x')
+  local y = LuaKey.string('y')
+  local empty: LuaValue
+  local invalid: LuaKey
+  assert(f:get(x).kind == LuaValueKind.Nil and f:len() == 0)
+  assert(f:set(x, empty) and f:len() == 0)
+  assert(not f:set(invalid, LuaValue.integer(5)) and f:len() == 0)
+  assert(f:set(x, LuaValue.boolean(false)))
+  assert(not f:get(x):truthy() and f:get(x).kind == LuaValueKind.Boolean)
+  assert(not f:set(y, LuaValue.string('full')))
+  assert(f:len() == 1 and f:get(y).kind == LuaValueKind.Nil)
+  assert(f:set(x, LuaValue.integer(7)) and f:get(x).data.i == 7)
+  assert(f:set(y, empty) and f:get(x).data.i == 7)
+  assert(f:set(x, empty) and f:len() == 0)
+  assert(f:set(y, LuaValue.number(1.5)) and f:get(y).data.n == 1.5)
+end
+
+local State = @record{remaining: integer, live: integer, attempts: integer}
+local FailAllocator = @record{state: *State}
+function FailAllocator:alloc(size: usize): pointer
+  self.state.attempts = self.state.attempts + 1
+  if self.state.remaining == 0 then return nilptr end
+  self.state.remaining = self.state.remaining - 1
+  local p = general_allocator:alloc(size)
+  if p ~= nilptr then self.state.live = self.state.live + 1 end
+  return p
+end
+function FailAllocator:alloc0(size: usize): pointer
+  self.state.attempts = self.state.attempts + 1
+  if self.state.remaining == 0 then return nilptr end
+  self.state.remaining = self.state.remaining - 1
+  local p = general_allocator:alloc0(size)
+  if p ~= nilptr then self.state.live = self.state.live + 1 end
+  return p
+end
+function FailAllocator:dealloc(p: pointer): void
+  self.state.live = self.state.live - 1
+  general_allocator:dealloc(p)
+end
+
+local D = @LuaTable(FailAllocator)
+local state: State
+local empty: LuaValue
+local sk = LuaKey.string('test')
+local sv = LuaValue.string('owned')
+do
+  local t <close> = D.make({state=&state})
+  assert(t:get(sk).kind == LuaValueKind.Nil and t:set(sk, empty))
+  assert(t:len() == 0 and state.attempts == 0)
+  -- Fail value copy, then key copy, then initial backing allocation.
+  for budget = 0, 2 do
+    state.remaining = budget
+    assert(not t:set(sk, sv))
+    assert(t:get(sk).kind == LuaValueKind.Nil and t:len() == 0 and state.live == 0)
+  end
+  state.remaining = 3
+  assert(t:set(sk, sv) and state.live == 3)
+  assert(not t:set(sk, LuaValue.string('new')))
+  assert(t:get(sk).data.s == 'owned' and state.live == 3)
+  state.remaining = 20
+  for i = 1, 5 do assert(t:set(LuaKey.integer(i), LuaValue.integer(i))) end
+  assert(t:len() == 6)
+  state.remaining = 2
+  -- Fail growth after copying the proposed key and value. Both must be cleaned.
+  local growthkey = LuaKey.string('growth')
+  assert(not t:set(growthkey, sv))
+  assert(t:get(growthkey).kind == LuaValueKind.Nil and t:len() == 6 and state.live == 3)
+  for i = 1, 5 do assert(t:get(LuaKey.integer(i)).data.i == i) end
+  state.remaining = 3
+  assert(t:set(growthkey, sv))
+  assert(t:get(growthkey).data.s == 'owned' and t:len() == 7 and state.live == 5)
+end
+assert(state.live == 0)

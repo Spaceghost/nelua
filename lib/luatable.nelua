@@ -1,0 +1,270 @@
+-- Opt-in native Lua-style tables. See docs/design/native-lua-tables.md.
+global LuaKeyKind = @enum(uint8){ Empty = 0, Integer, String }
+global LuaValueKind = @enum(uint8){ Nil = 0, Boolean, Integer, Number, String }
+global LuaKey = @record{
+  kind: LuaKeyKind,
+  data: union{i: int64, s: string}
+}
+global LuaValue = @record{
+  kind: LuaValueKind,
+  data: union{b: boolean, i: int64, n: float64, s: string}
+}
+
+function LuaKey.integer(x: int64): LuaKey <inline>
+  return {kind=LuaKeyKind.Integer, data={i=x}}
+end
+function LuaKey.string(x: string): LuaKey <inline>
+  return {kind=LuaKeyKind.String, data={s=x}}
+end
+function LuaValue.boolean(x: boolean): LuaValue <inline>
+  return {kind=LuaValueKind.Boolean, data={b=x}}
+end
+function LuaValue.integer(x: int64): LuaValue <inline>
+  return {kind=LuaValueKind.Integer, data={i=x}}
+end
+function LuaValue.number(x: float64): LuaValue <inline>
+  return {kind=LuaValueKind.Number, data={n=x}}
+end
+function LuaValue.string(x: string): LuaValue <inline>
+  return {kind=LuaValueKind.String, data={s=x}}
+end
+
+function LuaValue:truthy(): boolean <inline>
+  return self.kind ~= LuaValueKind.Nil and
+         (self.kind ~= LuaValueKind.Boolean or self.data.b)
+end
+
+local function validkey(key: LuaKey): boolean <inline>
+  return key.kind == LuaKeyKind.Integer or key.kind == LuaKeyKind.String
+end
+local function equalkey(a: LuaKey, b: LuaKey): boolean <inline>
+  if a.kind ~= b.kind then return false end
+  if a.kind == LuaKeyKind.Integer then return a.data.i == b.data.i end
+  if a.kind == LuaKeyKind.String then return a.data.s == b.data.s end
+  return false
+end
+
+local Entry = @record{key: LuaKey, value: LuaValue}
+
+-- Bounded tables store entries inline. String bytes remain caller-owned.
+## local function make_fixed(N)
+  ## static_assert(type(N) == 'number' and math.type(N) == 'integer' and N >= 1,
+  ##               'FixedLuaTable requires a positive integer capacity')
+  local T = @record{entries: [#[N]#]Entry}
+  function T:get(key: LuaKey): LuaValue <inline>
+    for i: usize=0,<#self.entries do
+      if equalkey(self.entries[i].key, key) then return self.entries[i].value end
+    end
+    return (@LuaValue){}
+  end
+  function T:set(key: LuaKey, value: LuaValue): boolean <inline>
+    if not validkey(key) then return false end
+    local free: usize = #self.entries
+    for i: usize=0,<#self.entries do
+      if equalkey(self.entries[i].key, key) then
+        if value.kind == LuaValueKind.Nil then
+          self.entries[i] = (@Entry){}
+        else
+          self.entries[i].value = value
+        end
+        return true
+      end
+      if free == #self.entries and self.entries[i].key.kind == LuaKeyKind.Empty then
+        free = i
+      end
+    end
+    if value.kind == LuaValueKind.Nil then return true end
+    if free == #self.entries then return false end
+    self.entries[free] = {key=key,value=value}
+    return true
+  end
+  function T:len(): usize <inline>
+    local n: usize = 0
+    for i: usize=0,<#self.entries do
+      if self.entries[i].key.kind ~= LuaKeyKind.Empty then n = n + 1 end
+    end
+    return n
+  end
+  ## return T
+## end
+global FixedLuaTable: type = #[generalize(make_fixed)]#
+
+-- Dynamic tables use a native open-addressed hash table; nothing proportional
+-- to the numeric key and no tombstones to accumulate after repeated erasures.
+local function hashkey(key: LuaKey): usize <inline>
+  local h: uint64
+  if key.kind == LuaKeyKind.Integer then
+    h = (@uint64)(key.data.i)
+  else
+    h = 0xcbf29ce484222325_u64
+    local s = key.data.s
+    for i: usize=0,<s.size do
+      h = (h ~ (@uint64)(s.data[i])) * 0x100000001b3_u64
+    end
+  end
+  -- Mix high bits down before reducing to a power-of-two slot index.
+  h = (h ~ (h >> 30)) * 0xbf58476d1ce4e5b9_u64
+  h = (h ~ (h >> 27)) * 0x94d049bb133111eb_u64
+  return (@usize)(h ~ (h >> 31))
+end
+
+local function find(entries: *[0]Entry, mask: usize, key: LuaKey): usize <inline>
+  local i = hashkey(key) & mask
+  while entries[i].key.kind ~= LuaKeyKind.Empty and not equalkey(entries[i].key, key) do
+    i = (i + 1) & mask
+  end
+  return i
+end
+
+## local function make_dynamic(A)
+  ## static_assert(traits.is_type(A), 'LuaTable requires an allocator type')
+  local Allocator: type = #[A]#
+  local T <owned> = @record{
+    allocator: Allocator,
+    entries: *[0]Entry,
+    capacity: usize,
+    size: usize
+  }
+
+  function T.make(allocator: Allocator): T
+    return (@T){allocator=allocator}
+  end
+
+  local function clone(self: *T, text: string): string <inline>
+    if text.size == 0 then return '' end
+    if text.size == (@usize)(-1) then return '' end
+    local data = (@*[0]byte)(self.allocator:alloc(text.size + 1))
+    if data == nilptr then return '' end
+    for i: usize=0,<text.size do data[i] = text.data[i] end
+    data[text.size] = 0
+    return {data=data,size=text.size}
+  end
+
+  local function droptext(self: *T, text: string): void <inline>
+    if text.size ~= 0 then self.allocator:dealloc(text.data) end
+  end
+
+  local function dropvalue(self: *T, value: LuaValue): void <inline>
+    if value.kind == LuaValueKind.String then droptext(self, value.data.s) end
+  end
+
+  local function dropkey(self: *T, key: LuaKey): void <inline>
+    if key.kind == LuaKeyKind.String then droptext(self, key.data.s) end
+  end
+
+  local function grow(self: *T): boolean
+    local n: usize = 8
+    if self.capacity ~= 0 then
+      if self.capacity > ((@usize)(-1) // #Entry) // 2 then return false end
+      n = self.capacity * 2
+    end
+    local entries = (@*[0]Entry)(self.allocator:alloc0(n * #Entry))
+    if entries == nilptr then return false end
+    for i: usize=0,<self.capacity do
+      local entry = self.entries[i]
+      if entry.key.kind ~= LuaKeyKind.Empty then
+        entries[find(entries, n - 1, entry.key)] = entry
+      end
+    end
+    if self.entries ~= nilptr then self.allocator:dealloc(self.entries) end
+    self.entries, self.capacity = entries, n
+    return true
+  end
+
+  local function erase(self: *T, hole: usize): void
+    local mask = self.capacity - 1
+    dropkey(self, self.entries[hole].key)
+    dropvalue(self, self.entries[hole].value)
+    local i = (hole + 1) & mask
+    while self.entries[i].key.kind ~= LuaKeyKind.Empty do
+      local home = hashkey(self.entries[i].key) & mask
+      if ((hole - home) & mask) < ((i - home) & mask) then
+        self.entries[hole] = self.entries[i]
+        hole = i
+      end
+      i = (i + 1) & mask
+    end
+    self.entries[hole] = (@Entry){}
+    self.size = self.size - 1
+  end
+
+  function T:len(): usize <inline>
+    return self.size
+  end
+
+  function T:get(key: LuaKey): LuaValue <inline>
+    if self.capacity == 0 or not validkey(key) then return (@LuaValue){} end
+    return self.entries[find(self.entries, self.capacity - 1, key)].value
+  end
+
+  local function set_cold(self: *T, key: LuaKey, value: LuaValue, i: usize, found: boolean): boolean <noinline>
+    if value.kind == LuaValueKind.Nil then
+      if found then erase(self, i) end
+      return true
+    end
+    -- Copy both borrowed strings before any mutation. The input may itself
+    -- reference a current table value, including the value being replaced.
+    if value.kind == LuaValueKind.String then
+      local text = clone(self, value.data.s)
+      if text.size ~= value.data.s.size then return false end
+      value.data.s = text
+    end
+    if found then
+      dropvalue(self, self.entries[i].value)
+      self.entries[i].value = value
+      return true
+    end
+    if key.kind == LuaKeyKind.String then
+      local text = clone(self, key.data.s)
+      if text.size ~= key.data.s.size then
+        dropvalue(self, value)
+        return false
+      end
+      key.data.s = text
+    end
+    if self.size >= self.capacity - self.capacity // 4 then
+      if not grow(self) then
+        dropkey(self, key)
+        dropvalue(self, value)
+        return false
+      end
+      i = find(self.entries, self.capacity - 1, key)
+    end
+    self.entries[i] = {key=key,value=value}
+    self.size = self.size + 1
+    return true
+  end
+
+  function T:set(key: LuaKey, value: LuaValue): boolean <inline>
+    if not validkey(key) then return false end
+    local i: usize = 0
+    local found = false
+    if self.capacity ~= 0 then
+      i = find(self.entries, self.capacity - 1, key)
+      found = self.entries[i].key.kind ~= LuaKeyKind.Empty
+      if found and value.kind ~= LuaValueKind.Nil and value.kind ~= LuaValueKind.String and
+         self.entries[i].value.kind ~= LuaValueKind.String then
+        self.entries[i].value = value
+        return true
+      end
+    end
+    return set_cold(self, key, value, i, found)
+  end
+
+  function T:destroy(): void
+    for i: usize=0,<self.capacity do
+      if self.entries[i].key.kind ~= LuaKeyKind.Empty then
+        dropkey(self, self.entries[i].key)
+        dropvalue(self, self.entries[i].value)
+      end
+    end
+    if self.entries ~= nilptr then self.allocator:dealloc(self.entries) end
+    self.entries, self.capacity, self.size = nilptr, 0, 0
+  end
+
+  function T:__close(): void
+    if self.entries ~= nilptr then self:destroy() end
+  end
+  ## return T
+## end
+global LuaTable: type = #[generalize(make_dynamic)]#
