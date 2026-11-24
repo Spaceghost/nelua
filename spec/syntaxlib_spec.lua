@@ -3,6 +3,7 @@ local describe, it = lester.describe, lester.it
 local expect = require 'spec.tools.expect'
 local aster = require 'nelua.aster'
 local except = require 'nelua.utils.except'
+local fs = require 'nelua.utils.fs'
 
 local function parse_error(code, message, filename)
   local ok, err = except.try(function() aster.parse(code, filename or 'syntaxlib_spec.nelua') end)
@@ -262,18 +263,30 @@ it('reports malformed extension syntax at its source', function()
   ]=], 'expected an expression')
 end)
 
-it('runs the complete tour and every complete guide example', function()
+it('runs the complete syntax tour', function()
   expect.run_c_from_file('examples/syntax_tour.nelua',
     'NELUA: kind 42, bytes 1024, ready, total 22\neven squares: 4, first 4, last 64')
-  local file = assert(io.open('docs/pages/syntax-extensions.md', 'r'))
-  local guide = file:read('a')
-  file:close()
+end)
+
+local function run_guide_examples(use_bend)
+  local guide = assert(fs.readfile('docs/pages/syntax-extensions.md'))
   local count = 0
   for code in guide:gmatch('```nelua\n(.-)```') do
-    count = count + 1
-    expect.run_c(code)
+    local needs_bend = code:find('syntax.bend2', 1, true) ~= nil
+    if needs_bend == use_bend then
+      expect.run_c(code)
+      count = count + 1
+    end
   end
   expect.truthy(count > 0)
+end
+
+it('runs the syntax guide examples', function()
+  run_guide_examples(false)
 end)
+
+it('runs the Bend2 syntax guide examples', function()
+  run_guide_examples(true)
+end, os.getenv('NELUA_BEND') ~= nil or fs.findbinfile('bend') ~= nil)
 
 end)

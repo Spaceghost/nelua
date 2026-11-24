@@ -22,6 +22,10 @@ jobs:
         fetch-depth: 0
     - name: Show C compiler information
       run: ${{matrix.cc}} -v
+    # Ubuntu 24.04's Clang 18 crashes in AArch64 GlobalISel on empty records.
+    - name: Use SelectionDAG on Ubuntu ARM Clang
+      if: matrix.os == 'ubuntu-24.04-arm' && matrix.cc == 'clang'
+      run: echo "CFLAGS=$CFLAGS -fno-global-isel" >> "$GITHUB_ENV"
     - name: Compile
       run: make CC=${{matrix.cc}}
     - name: Test
