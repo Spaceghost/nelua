@@ -21,6 +21,9 @@ the complete grammar-builder API. Try `nelua examples/syntax_tour.nelua`.
 
 ## Quick start
 
+For Linux AArch64 builds and the arm64 package, see the
+[Fedora Incus build guide](docs/arm64-fedora-incus.md).
+
 - For basic information check the [Website](https://nelua.io/).
 - For first steps and how to use Nelua, start at the [Tutorial](https://nelua.io/tutorial/).
 - For a tour of the language's syntax, features and usage read the [Overview](https://nelua.io/overview/).
