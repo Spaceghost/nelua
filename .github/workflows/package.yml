@@ -14,9 +14,13 @@ jobs:
   package:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
         include:
         - os: ubuntu-latest
+          cc: musl-gcc
+          cflags: -O2 -flto -fno-plt
+          pkgext: .tar.xz
+        - os: ubuntu-24.04-arm
           cc: musl-gcc
           cflags: -O2 -flto -fno-plt
           pkgext: .tar.xz
@@ -34,7 +38,7 @@ jobs:
       with:
         fetch-depth: 0
     - name: Install musl
-      if: ${{ matrix.os == 'ubuntu-latest' }}
+      if: runner.os == 'Linux'
       run: sudo apt-get update && sudo apt-get install musl-tools
     - name: Package
       shell: bash
