@@ -1,0 +1,7 @@
+contact_links:
+  - name: Upstream Nelua discussions
+    url: https://github.com/edubart/nelua-lang/discussions
+    about: Ask general Nelua language questions.
+  - name: Report a vulnerability privately
+    url: https://github.com/Spaceghost/nelua/security/advisories/new
+    about: Share security issues affecting this repository with its maintainers.

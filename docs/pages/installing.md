@@ -8,15 +8,22 @@ order: 1
 
 {% raw %}
 
-Instructions for installing Nelua on Windows or Linux.
+Build the Spaceghost fork of Nelua on Linux, macOS, or Windows.
 {: .lead}
 
-To install Nelua you need a system with the following:
+Building from source requires Git, Make, and a C compiler. Nelua includes
+the Lua interpreter used by the compiler. A C compiler is also needed to
+compile Nelua programs when using a prebuilt package.
 
-* Git (for cloning Nelua)
-* A C compiler (GCC or Clang are recommended)
-* Build tools (such as make)
-* GDB debugger (in case you want to debug runtime errors)
+## Prebuilt development builds
+
+Download the archive for your machine from the
+[latest development release](https://github.com/Spaceghost/nelua/releases/tag/latest).
+The release offers packages for Linux x86-64 and AArch64, macOS arm64,
+and Windows x86-64. Extract the archive and keep the launcher, bundled
+interpreter, `lib`, and `lualib` together. From the extracted directory,
+run `./nelua -v` on Unix or `./nelua.bat -v` on Windows to see the build
+information. Use the source steps below to build a specific Git revision.
 
 ## Linux
 
@@ -25,91 +32,71 @@ Use your system's package manager to install all of the required tools first:
 For example, on **Ubuntu** you should do:
 
 ```bash
-sudo apt-get install build-essential git gcc gdb
+sudo apt-get install build-essential git
 ```
 
 While on **ArchLinux**, you should do:
 
 ```bash
-sudo pacman -S base-devel git gcc gdb
+sudo pacman -S base-devel git
 ```
 
-## MacOS
+## macOS
 
-First make sure you have installed **brew**, then run:
+Install the Xcode Command Line Tools for Clang, Git, and Make.
 
 ```bash
-brew install gcc gdb git make
+xcode-select --install
 ```
 
 ## Windows
 
-MSYS2 is the recommended and supported environment to use Nelua on Windows.
-Although you could use other tools, MSYS2 makes using Nelua very easy on Windows,
-plus there are many useful C packages on MSYS2 that you can install with ease, such as
-SDL2.
-
-Download and install [MSYS2](https://www.msys2.org/).
-After installing open the **64 bit terminal**, that is,
-**msys64**, and update:
+Install [MSYS2](https://www.msys2.org/) and open the **UCRT64** terminal.
+Install the build tools and make sure the MinGW GCC is on your path.
 
 ```bash
 pacman -Syu
+pacman -S --needed make git mingw-w64-ucrt-x86_64-gcc
 ```
 
-You may need close and reopen the terminal and update a second time using the same command.
+If MSYS2 asks you to close the terminal during the update, reopen UCRT64
+and run `pacman -Syu` again before installing the packages.
 
-Now install all the required tools:
-
-```bash
-pacman -S base-devel git mingw-w64-x86_64-gcc gdb
-```
-
-## Clone and Install
-
-Now you can clone the project and compile:
+## Clone and install
 
 ```bash
-git clone https://github.com/edubart/nelua-lang.git && cd nelua-lang
+git clone https://github.com/Spaceghost/nelua.git
+cd nelua
 make
 ```
 
-Now install in your system:
+On Linux with Clang, use `make CC=clang` and pass `--cc clang` when running Nelua if GCC is unavailable.
+
+Run `./nelua` directly on Linux or macOS and `./nelua.bat` in MSYS2. On Unix you
+can also install Nelua in your user account.
 
 ```bash
-sudo make install
+make install PREFIX="$HOME/.local"
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-On Linux this will install in `/usr/local` by default,
-you could install it somewhere else using the `PREFIX` argument.
-For example, suppose you want to install in your home directory,
-then you could use `make install PREFIX=/home/user/nelua`
-and the Nelua compiler would be available at `/home/user/nelua/bin/nelua`.
-
-Alternatively, if you want to run Nelua directly from the cloned repository,
-then you have the following options:
-* You could add the cloned `nelua-lang` directory to your `PATH` environment variable,
-then the `nelua` command will become available in your terminal.
-* You could create symbolic links to `./nelua` and `./nelua-lua`
-in one directory of your `PATH` environment variable.
-* You could run the `./nelua` file directly.
-
-Proceed to the [testing section](#testing).
+The default install prefix is `/usr/local`. Use `sudo make install` if you
+want that system-wide location and it requires administrator privileges.
+For a native Linux AArch64 build and packaging example, see the
+[Fedora Incus guide](https://github.com/Spaceghost/nelua/blob/master/docs/arm64-fedora-incus.md).
 
 ## Testing
 
-Nelua should be installed. Run `nelua -h` in your terminal to check if it is working.
-If doesn't work, your environment `PATH` variable is missing the `bin` folder of the Nelua installation.
-Add it or find and execute the full path to the installed Nelua compiler to use it.
-
-Run the hello world example:
+From the checkout root, run:
 
 ```bash
-nelua examples/helloworld.nelua
+./nelua -v
+./nelua examples/helloworld.nelua
+make test
 ```
 
-You can run any file in the `examples` or `tests` directories,
-play with them to test or to learn how to code in Nelua.
+On Windows, use `./nelua.bat` for the first two commands. If you installed Nelua
+to a directory on your `PATH`, you can invoke it as `nelua`.
 
 The most interesting examples are perhaps the graphical ones,
 such as `snakesdl.nelua` and `condots.nelua`.
@@ -119,11 +106,11 @@ Install it using your system's package manager and run the example:
 
 ```bash
 # install SDL2 on MSYS2
-pacman -S mingw-w64-x86_64-SDL2
+pacman -S mingw-w64-ucrt-x86_64-SDL2
 # install SDL2 on Ubuntu
 sudo apt-get install libsdl2-dev
-# run it
-nelua examples/snakesdl.nelua
+# run it from the checkout (use ./nelua.bat on Windows)
+./nelua examples/snakesdl.nelua
 ```
 
 <a href="/tutorial/" class="btn btn-outline-primary btn-lg float-right">Tutorial >></a>

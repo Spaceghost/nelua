@@ -32,3 +32,5 @@ preview.md
 test_file.tmp
 require_tmp.nelua
 *-bindings.nelua
+__pycache__/
+/tools/textmate-nelua/node_modules/

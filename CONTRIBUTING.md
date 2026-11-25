@@ -1,40 +1,42 @@
-## Contributing to Nelua
+# Contributing to Nelua
 
-Hello contributors! Welcome to Nelua!
+Use [this repository's issues](https://github.com/Spaceghost/nelua/issues) for bugs and
+proposals involving the Spaceghost fork. Search existing issues first and include the
+output of `nelua -v`, your OS and architecture, your C compiler, and the smallest example
+that reproduces the behavior. For large changes, open an issue to discuss the intended
+behavior before writing a patch.
 
-Do you enjoy Nelua and want to contribute? Nice! You can help with the following points:
+For upstream language questions, use [upstream discussions](https://github.com/edubart/nelua-lang/discussions)
+or the [Nelua Discord](https://discord.gg/7aaGeG7). Use the
+[security policy](SECURITY.md) for vulnerabilities.
 
-- Documentation - Can you write or improve the documentation?
-- Tutorials - Can you write a tutorial?
-- Examples - Can you share something cool made with Nelua?
-- Testing - Can you find bugs?
-- Support - Can you help newcomers?
+## Build and test
 
-### Opening new Issues
+```sh
+make
+make test
+```
 
-To open new issue for Nelua (bug or enhancement), just try to follow these rules:
+Run commands from the checkout root unless the tool's guide specifies another
+directory. `make test-quick` stops at the first failure. On Windows, use the
+[MSYS2 setup](docs/pages/installing.md#windows).
 
-- If you need support, have questions, ideas to discuss you should use the [Nelua Discussions](https://github.com/edubart/nelua-lang/discussions) forum or the [Nelua Discord server](https://discord.gg/7aaGeG7) instead of opening a new issue.
-- Make sure you test the issue on the latest master branch.
-- Make sure the issue has not already been reported before by searching on GitHub under issues.
-- Make sure you are not misusing Nelua.
-- Be sure to include a title, a clear description, expected behavior, relevant information, and a code sample demonstrating the unexpected behavior.
+| Area | Where to work | How to verify |
+| --- | --- | --- |
+| Parser, semantic analysis, and code generation | [lualib/nelua](lualib/nelua), [spec](spec) | `make test` |
+| Standard library | [lib](lib), [runtime fixtures](tests) | `./nelua tests/all_test.nelua` |
+| C hosting and freestanding builds | [examples/c_host](examples/c_host), [examples/freestanding](examples/freestanding) | `python3 examples/c_host/check.py --sanitize` and `python3 examples/freestanding/check.py --sanitize` on x86-64 Linux |
+| Bundled Lua interpreter and native dependencies | [src](src) | `make clean-nelualua`, then `make test` |
+| Bindings and editor grammars | [tools](tools) | Follow the [bindgen](tools/nelua-bindgen/README.md), [Tree-sitter](tools/tree-sitter-nelua/README.md), and [TextMate](tools/textmate-nelua/README.md) guides |
 
-### Sending a Pull Request
+The spec suite uses the bundled interpreter. `make check` requires LuaCheck.
+`make coverage-test` requires LuaCov. Some example programs require extra C libraries.
 
-Nelua is open source,
-but not very open to contributions in the form of pull requests,
-if you would like something fixed or implemented in the core language
-try first submitting a bug report or opening a discussion instead of doing a PR.
-The authors prefer it this way, so that the ideal solution is always provided,
-without unwanted consequences on the project, thus keeping the quality of the software.
+Keep changes focused, follow the surrounding style, and include a regression spec
+for behavior changes. Update the relevant [documentation](docs/README.md) when
+changing public syntax, options, or APIs. Regenerate editor artifacts using their
+documented tools and include the resulting files.
 
-If you insist doing a PR, typically for a small bug fix, then follow these guidelines:
-
-- Make sure the PR description clearly describes the problem and solution. Include the relevant issue number if applicable.
-- Don't send big pull requests (lots of changes), they are difficult to review. It's better to send small pull requests, one at a time.
-- Use different pull requests for different issues, each pull request should only address one issue.
-- When fixing a bug or adding a feature add tests related to your changes to assure the changes will always work as intended in the future and also to cover new lines added.
-- Verify that changes don't break the tests.
-- Don't change the code style, follow the same coding style rules as the code base.
-- Pull requests just doing style changes are not welcome, a PR must address a real issue.
+Exploratory and superseded work remains available on the
+[`archive/` branches](https://github.com/Spaceghost/nelua/branches/all?query=archive%2F).
+Those branches record their own state and context. Use `master` for a current build.

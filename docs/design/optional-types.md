@@ -1,4 +1,4 @@
-# Optional types and `?` propagation for Spaceghost/nelua-lang (final design, slices 1-4 implemented)
+# Optional types and `?` propagation for Spaceghost/nelua (final design, slices 1-4 implemented)
 
 Base: Design 1 (judge average 6.75 vs 6.5 and 4.25). `T?` is sugar for a preprocessor generic `optional(T)` in
 `lib/optional.nelua`, built like `lib/variant.nelua` (record + `__convert` concept + `<nickname>`) and wired like

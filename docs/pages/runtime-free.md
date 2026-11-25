@@ -41,7 +41,7 @@ The host must pass a valid writable pointer for one `uint32_t`, or a null pointe
 The function rejects null and arithmetic overflow, leaving the output unchanged
 on failure. There is no allocation or initialization to perform before calling
 it. A runnable copy, with its C header and tests, lives in
-[examples/freestanding](https://github.com/Spaceghost/nelua-lang/tree/master/examples/freestanding).
+[examples/freestanding](https://github.com/Spaceghost/nelua/tree/master/examples/freestanding).
 
 `nochecks` deliberately disables compiler-inserted runtime checks. It is not a
 requirement for every possible runtime-free function, and it is not a general
@@ -125,7 +125,7 @@ static assertion is not a fix for a real ABI mismatch.
 
 ## C-hosted: no Nelua runtime, C libraries allowed
 
-The [C-host example](https://github.com/Spaceghost/nelua-lang/tree/master/examples/c_host)
+The [C-host example](https://github.com/Spaceghost/nelua/tree/master/examples/c_host)
 exports bounded JSON-span and int64-formatting callbacks. C supplies `main`,
 borrowed inputs and output buffers. Nelua uses fixed temporary arrays and an
 explicit C `memcpy` binding. The host can use its normal C libraries.

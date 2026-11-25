@@ -4207,5 +4207,5 @@ forwards to it, so `if p then`, `p orelse d` and `f()?` work on the result while
 mirrors every flag plus `prepend`/`append` text written around the generated
 declarations; command-line flags override the file.
 
-See [tools/nelua-bindgen/README.md](https://github.com/Spaceghost/nelua-lang/tree/master/tools/nelua-bindgen)
+See [tools/nelua-bindgen/README.md](https://github.com/Spaceghost/nelua/tree/master/tools/nelua-bindgen)
 for the full mapping and option tables.

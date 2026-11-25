@@ -9,17 +9,17 @@ order: 8
 
 {% raw %}
 
-[Spaceghost/nelua-lang](https://github.com/Spaceghost/nelua-lang) is upstream Nelua
-(`a5845056`, 2025-06-24) plus a small set of language features and tools that a C library
-written in Nelua ([nelibc](https://github.com/Spaceghost/nelibc)) and a userland built on it
-([nebox](https://github.com/Spaceghost/nebox)) asked for. This page explains each addition in
-plain terms: the problem it solves, what the code looks like, what it costs at run time, and
-where its limits are. Everything here compiles to the same kind of C upstream emits, needs no
-garbage collector and works under `pragmas.nogc` and `pragmas.freestanding`.
+[Spaceghost/nelua](https://github.com/Spaceghost/nelua) is based on
+[upstream Nelua at `a5845056`](https://github.com/edubart/nelua-lang/commit/a5845056)
+(2025-06-24). Its additions grew out of work on
+[nelibc](https://github.com/Spaceghost/nelibc) and
+[nebox](https://github.com/Spaceghost/nebox). This guide covers the additions,
+their runtime costs, and where each one fits.
 {: .lead}
 
-Code written for upstream Nelua compiles unchanged. Every feature below is opt-in: you reach for
-it by writing new syntax or by requiring a new library, never by accident.
+Many features are opt-in through a library import or pragma. When upgrading an
+existing upstream program, check for identifiers that conflict with new keywords
+such as `orelse`, then run your program's tests.
 {: .callout.callout-info}
 
 ## At a glance
@@ -327,7 +327,7 @@ enums (`--enum-using`), wrap pointer-returning functions in `*T?` optionals
 tools/nelua-bindgen/nelua-bindgen.py zlib.h --include-as '<zlib.h>' -o zlib.nelua
 ```
 
-Read more: [nelua-bindgen README](https://github.com/Spaceghost/nelua-lang/blob/master/tools/nelua-bindgen/README.md).
+Read more: [nelua-bindgen README](https://github.com/Spaceghost/nelua/blob/master/tools/nelua-bindgen/README.md).
 
 ## Compile-time evaluation
 
@@ -480,9 +480,16 @@ statement.
 
 ## How changes are gated
 
-Each addition lands with a spec in `spec/` and a section in these docs. `make test` runs
-upstream's suite plus the fork's specs; nelibc's smoke matrix and nebox's conformance suite are
-rebuilt against the fresh compiler in a pinned container before a change reaches `master`.
-Work that is not finished stays on a branch and is not described here as done.
+Run `make test` to exercise the upstream suite and the fork's compiler specs.
+The [contributor guide](https://github.com/Spaceghost/nelua/blob/master/CONTRIBUTING.md)
+lists the checks for C hosting, freestanding builds, bindings, and editor grammars.
+
+## Further reading
+
+- [Native Lua-style tables](https://github.com/Spaceghost/nelua/blob/master/docs/design/native-lua-tables.md)
+  and the [typed table facade](https://github.com/Spaceghost/nelua/blob/master/docs/design/typed-lua-tables.md)
+  describe the opt-in storage models and their trade-offs.
+- The [Linux AArch64 guide](https://github.com/Spaceghost/nelua/blob/master/docs/arm64-fedora-incus.md)
+  covers building and packaging on Fedora.
 
 {% endraw %}

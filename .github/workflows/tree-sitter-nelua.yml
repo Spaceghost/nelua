@@ -26,15 +26,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '22'
-      - name: Install pinned editor generator and owner compiler
+      - name: Install pinned editor generator and build pinned compiler
         run: |
           npm install --prefix "$RUNNER_TEMP/nelua-tree-sitter" tree-sitter-cli@0.25.10
-          git clone --filter=blob:none https://github.com/Spaceghost/nelua-lang "$RUNNER_TEMP/nelua-fork"
-          git -C "$RUNNER_TEMP/nelua-fork" checkout --detach 6a4246a99166c596e7fa9ed74c5e61866712bfc6
+          git worktree add --detach "$RUNNER_TEMP/nelua-fork" 6a4246a99166c596e7fa9ed74c5e61866712bfc6
           make -C "$RUNNER_TEMP/nelua-fork" -j2
       - name: Verify clean parser/scanner generation, corpus and scanner ABI
         working-directory: tools/tree-sitter-nelua

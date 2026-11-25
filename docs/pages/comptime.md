@@ -75,7 +75,7 @@ assert(PARITY == 0)
 
 These divisions demonstrate static configuration; they are not a device-qualified clock
 or peripheral-register formula. The runnable version is
-[`examples/comptime_config.nelua`](https://github.com/Spaceghost/nelua-lang/blob/master/examples/comptime_config.nelua).
+[`examples/comptime_config.nelua`](https://github.com/Spaceghost/nelua/blob/master/examples/comptime_config.nelua).
 
 Arguments may instead be literal records, inferred initializer lists, or the folded results
 of other compile-time calls. Positional fields, named fields, and normal record initializer

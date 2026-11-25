@@ -36,7 +36,7 @@ enabled implicitly in ordinary upstream-compatible source files.
 
 Run the complete tour with `./nelua examples/syntax_tour.nelua` from the compiler
 checkout. Its source is in
-[examples/syntax_tour.nelua](https://github.com/Spaceghost/nelua-lang/blob/master/examples/syntax_tour.nelua).
+[examples/syntax_tour.nelua](https://github.com/Spaceghost/nelua/blob/master/examples/syntax_tour.nelua).
 
 ## Choose your modules
 
