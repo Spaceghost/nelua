@@ -1,6 +1,6 @@
 # Nelua
 
-![Nelua logo](docs/assets/img/nelua-logo-64px.png)
+<img src="docs/assets/img/nelua-logo.svg" alt="Nelua logo" width="64" height="64">
 
 Nelua is a Lua-inspired systems programming language with static typing and
 compile-time metaprogramming. It translates Nelua to C and uses a C compiler to

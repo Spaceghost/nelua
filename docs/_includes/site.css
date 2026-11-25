@@ -8,7 +8,7 @@ body {
 }
 
 /* Brand */
-.nelua-brand svg {
+.nelua-brand .nelua-logo {
   width: 2.8rem;
   height: 2.8rem;
 }
@@ -19,7 +19,7 @@ body {
   font-weight: bold;
 }
 
-.nelua-brand-big svg {
+.nelua-brand-big .nelua-logo {
   width: 12rem;
   height: 12rem;
 }
